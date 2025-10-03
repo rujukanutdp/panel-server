@@ -7,6 +7,7 @@ const multer = require('multer');
 const cors = require('cors');
 
 const app = express();
+app.use(express.static(__dirname));
 app.use(cors());
 app.use(express.json());
 
@@ -210,6 +211,11 @@ app.post('/upload', upload.single('file'), (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "panel_client.html"));
+});
+
 app.listen(port, () => {
   console.log(`Server berjalan di http://localhost:${port}`);
 });
+
