@@ -79,13 +79,15 @@ function readExcelToPanel() {
   const meta = { merk: '', lot: '', exp: '' };
   for (let r = 0; r < headerRowIndex; r++) {
     const row = aoa[r] || [];
-    for (let c = 0; c < row.length; c++) {
-      const v = (row[c] || '').toString().toLowerCase();
-      if (v.includes('merk')) meta.merk = (row[c+1]||'').toString().trim();
-      if (v.includes('lot') || v.includes('no.lot')) meta.lot = (row[c+1]||'').toString().trim();
-      if (v.includes('exp')) meta.exp = (row[c+1]||'').toString().trim();
-    }
-  }
+   const lower = row.map(c => (c || '').toString().toLowerCase());
+
+  // Cari kata kunci di kolom mana pun
+  lower.forEach((cell, i) => {
+    if (cell.includes('merk') && row[i + 1]) meta.merk = row[i + 1].toString().trim();
+    if ((cell.includes('lot') || cell.includes('no. lot') || cell.includes('no.lot')) && row[i + 1]) meta.lot = row[i + 1].toString().trim();
+    if (cell.includes('exp') && row[i + 1]) meta.exp = row[i + 1].toString().trim();
+  });
+}
 
   const result = { meta, cells: [], auto: { '20c': '', '37c': '', 'iat': '', 'gel': '' } };
 
@@ -221,5 +223,6 @@ app.get("/", (req, res) => {
 app.listen(port, () => {
   console.log(`Server berjalan di http://localhost:${port}`);
 });
+
 
 
