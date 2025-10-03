@@ -177,6 +177,9 @@ function readExcelToPanel() {
 // GET /panel.json
 app.get('/panel.json', (req, res) => {
   try {
+    // Pastikan file selalu dibaca ulang
+    delete require.cache[require.resolve('xlsx')];
+    
     const out = readExcelToPanel();
     if (!out.ok) return res.status(404).json(out);
     return res.json(out);
@@ -218,4 +221,5 @@ app.get("/", (req, res) => {
 app.listen(port, () => {
   console.log(`Server berjalan di http://localhost:${port}`);
 });
+
 
