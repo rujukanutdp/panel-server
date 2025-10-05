@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Panel Skrining — Client</title>
+<style>
+  body{font-family:Inter,Arial,Helvetica,sans-serif;margin:12px;background:#f5f7fb;color:#0b1220}
+  .card{background:#fff;padding:14px;border-radius:10px;box-shadow:0 8px 24px rgba(2,6,23,0.06)}
+  .table-wrap{overflow:auto;border:1px solid #e2e8f0;border-radius:8px;margin-top:10px}
+  table{border-collapse:collapse;width:100%;min-width:1100px;table-layout:fixed}
+  th,td{padding:6px;border-right:1px solid rgba(15,23,42,0.04);text-align:center;white-space:nowrap}
+  th{background:#f8fafc;position:sticky;top:0}
+  select{padding:4px 6px;border-radius:6px}
+  .controls{margin-top:10px;display:flex;gap:8px;justify-content:space-between}
+  button{padding:8px 12px;border-radius:6px;background:#2563eb;color:#fff;border:0;cursor:pointer}
+  .small{font-size:13px;color:#64748b}
+  .antibody-badge {
+    display: inline-block;
+    background-color: #d9534f; /* merah */
+    color: white;
+    padding: 4px 10px;
+    margin: 3px;
+    border-radius: 4px;
+    font-weight: bold;
+    font-size: 14px;
+  }
+  .highlight-antigen {
+    background-color: rgba(255, 0, 0, 0.2);
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h2>Panel Skrining — (dari server)</h2>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button id="refreshBtn">Refresh data</button>
+      <div id="meta" class="small"></div>
+    </div>
+
+    <div id="tableWrap" class="table-wrap"></div>
+
+    <div class="controls">
+      <div>
+        <button id="analyzeBtn">Analyze</button>
+        <button id="saveBtn">Save local</button>
+        <button id="loadBtn">Load local</button>
+        <button id="exportBtn">Export JSON</button>
+      </div>
+      <div id="status" class="small"></div>
+    </div>
+
+    <pre id="jsonOut" style="display:none;background:#0b1220;color:#e6eef8;padding:8px;border-radius:6px"></pre>
+  </div>
+
+<script>
+let lastPanelData = null;
+
+async function fetchPanel(){
+  const resp = await fetch('/panel.json');
+  if(!resp.ok) throw new Error('Gagal fetch /panel.json');
+  return resp.json();
+}
+
+function mkSelect(cell, type){
+  const opts = ['?','Negatif','m.f','w','1+','2+','3+','4+','n.t'];
+  const s = document.createElement('select');
+  s.dataset.cell = cell;
+  s.dataset.type = type;
+  opts.forEach(o => {
+    const op = document.createElement('option'); op.value = o; op.textContent = o;
+    s.appendChild(op);
+  });
+  s.value = '?';
+  return s;
+}
+
+function antigenPresent(val){
+  if(!val) return false;
+  const v = String(val).trim();
+  if(v === '' || v === '0' || v.toLowerCase() === 'negatif' || v === '-') return false;
+  // treat '+' or any non-zero string as presence
+  return true;
+}
+
+function renderTable(j){
+  if(!j || !j.ok) {
+    document.getElementById('tableWrap').innerHTML = '<div style="padding:12px;">Tidak ada data (periksa antigram.xlsx)</div>';
+    return;
+  }
+  lastPanelData = j.data; // SIMPAN untuk analisis
+  const data = j.data;
+  const wrap = document.getElementById('tableWrap');
+  wrap.innerHTML = '';
+  const table = document.createElement('table');
+
+  // header (two rows)
+  const thead = document.createElement('thead');
+  const tr1 = document.createElement('tr');
+  const thSel = document.createElement('th'); thSel.rowSpan=2; thSel.textContent='Sel'; tr1.appendChild(thSel);
+  const thRef = document.createElement('th'); thRef.rowSpan=2; thRef.textContent='Ref.'; tr1.appendChild(thRef);
+  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:5,textContent:'Rh'}));
+  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:2,textContent:'Kell'}));
+  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:2,textContent:'Duffy'}));
+  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:2,textContent:'Kidd'}));
+  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:4,textContent:'MNS'}));
+  const thP1 = document.createElement('th'); thP1.rowSpan=2; thP1.textContent='P1'; tr1.appendChild(thP1);
+  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:2,textContent:'Lewis'}));
+  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:2,textContent:'Lutheran'}));
+  const thNo = document.createElement('th'); thNo.rowSpan=2; thNo.textContent='No'; tr1.appendChild(thNo);
+  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:4,textContent:'Hasil Pemeriksaan'}));
+  thead.appendChild(tr1);
+
+  const tr2 = document.createElement('tr');
+  const headers = ['D','C','E','c','e','K','k','Fya','Fyb','Jka','Jkb','M','N','S','s','Lea','Leb','Lua','Lub','20°C','37°C','IAT','Gel'];
+  headers.forEach(h => {
+    const th = document.createElement('th'); th.textContent = h; tr2.appendChild(th);
+  });
+  thead.appendChild(tr2);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  (data.cells || []).forEach((rowObj, idx) => {
+    const tr = document.createElement('tr');
+    const tdSel = document.createElement('td'); tdSel.textContent = rowObj.sel || (idx+1); tr.appendChild(tdSel);
+    const tdRef = document.createElement('td'); tdRef.textContent = rowObj.ref || ''; tr.appendChild(tdRef);
+
+    const ant = rowObj.antigen || {};
+    ['D','C','E','c','e','K','k','Fya','Fyb','Jka','Jkb','M','N','S','s','P1','Lea','Leb','Lua','Lub'].forEach(k=>{
+      const td = document.createElement('td'); td.className = 'antigen'; td.textContent = ant[k] || ''; tr.appendChild(td);
+    });
+
+    const tdNo = document.createElement('td'); tdNo.textContent = idx+1; tr.appendChild(tdNo);
+
+    tr.appendChild((()=>{ const td=document.createElement('td'); td.appendChild(mkSelect(idx+1,'20c')); return td })());
+    tr.appendChild((()=>{ const td=document.createElement('td'); td.appendChild(mkSelect(idx+1,'37c')); return td })());
+    tr.appendChild((()=>{ const td=document.createElement('td'); td.appendChild(mkSelect(idx+1,'iat')); return td })());
+    tr.appendChild((()=>{ const td=document.createElement('td'); td.appendChild(mkSelect(idx+1,'gel')); return td })());
+
+    tbody.appendChild(tr);
+  });
+
+  // auto control
+  const trAuto = document.createElement('tr');
+  const tdAuto = document.createElement('td'); tdAuto.colSpan = 23; tdAuto.textContent = 'Auto Kontrol'; trAuto.appendChild(tdAuto);
+  ['20c','37c','iat','gel'].forEach(type => {
+    const td = document.createElement('td'); td.appendChild(mkSelect('auto', type)); trAuto.appendChild(td);
+  });
+  tbody.appendChild(trAuto);
+
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+
+  // meta
+  document.getElementById('meta').textContent = `Merk: ${data.meta.merk||'-'}  Lot: ${data.meta.lot||'-'}  Exp: ${data.meta.exp||'-'}`;
+}
+
+// fetch + render
+async function refresh(){
+  try {
+    document.getElementById('status').textContent = 'Memuat...';
+    const j = await fetch('/panel.json').then(r => r.json());
+    renderTable(j);
+    document.getElementById('status').textContent = 'Data terupdate';
+  } catch(err) {
+    document.getElementById('status').textContent = 'Gagal load: ' + (err.message || err);
+    document.getElementById('tableWrap').innerHTML = '';
+  }
+}
+
+// simple reactive test (nilai dianggap reaktif)
+function isReactive(v){
+  if(!v) return false;
+  const vv = String(v).trim().toLowerCase();
+  if(vv === '?' || vv === 'negatif' || vv === 'n.t' || vv === 'nt') return false;
+  // treat these as reactive
+  if(['w','m.f','mf','mf.','mf'].includes(vv)) return true;
+  if(vv.startsWith('1+') || vv.startsWith('2+') || vv.startsWith('3+') || vv.startsWith('4+')) return true;
+  if(vv === '1+' || vv === '2+' || vv === '3+' || vv === '4+') return true;
+  // accept short forms like '1+','2+','3+','4+'
+  if(/[1-4]\+/.test(vv)) return true;
+  // accept plain '+' if ever used
+  if(vv === '+') return true;
+  return false;
+}
+
+// ANALYSIS (strict: antigen harus ada pada ALL reactive rows dan NOT present in ANY non-reactive)
+function analyzePanel() {
+  // ambil select values
+  const selects = Array.from(document.querySelectorAll('select[data-cell]'));
+  const byCell = {};
+  selects.forEach(s => {
+    const id = s.dataset.cell;
+    byCell[id] = byCell[id] || {};
+    byCell[id][s.dataset.type] = s.value;
+  });
+  
+function highlightAntigenColumns(candidates) {
+  // Ambil header tabel
+  const table = document.querySelector("table"); // sesuaikan jika pakai id/class spesifik
+  if (!table) return;
+
+  const headerCells = table.querySelectorAll("thead tr th"); 
+  const bodyRows = table.querySelectorAll("tbody tr");
+
+  candidates.forEach(candidate => {
+    // Nama antigen disesuaikan dengan penamaan header
+    const antigenName = candidate.replace("anti-", "").toUpperCase(); 
+    headerCells.forEach((th, colIndex) => {
+      const headerText = th.innerText.trim().toUpperCase();
+      if (headerText === antigenName) {
+        // Tambah class ke header
+        th.classList.add("highlight-antigen");
+        // Tambah class ke semua sel di kolom ini
+        bodyRows.forEach(row => {
+          const cell = row.children[colIndex];
+          if (cell) cell.classList.add("highlight-antigen");
+        });
+      }
+    });
+  });
+}
+
+  // check autokontrol
+   // ambil auto-control values
+  const autoVals = selects.filter(s => s.dataset.cell === 'auto').map(s => s.value);
+  // status auto kontrol: positif jika ada nilai reaktif di salah satu test
+  const autoPositive = autoVals.some(isReactive);
+  const autoStatus = autoPositive ? 'Positif' : 'Negatif';
+
+  // keterangan kemungkinan penyebab jika auto positif (sesuai permintaan)
+  const autoCauses = [];
+  if (autoPositive) {
+    autoCauses.push('autoantibodi');
+    autoCauses.push('alloantibodi terhadap antigen dengan fenotipe sama');
+    autoCauses.push('cold agglutinin');
+    autoCauses.push('reaksi nonspesifik (mis. hiperprotein, obat, dll)');
+  }
+
+  if(!lastPanelData) return alert('Tidak ada data panel (refresh dulu).');
+  const cells = lastPanelData.cells || [];
+
+  // build rows with results
+  const rows = cells.map((c, idx) => {
+    const id = String(idx+1);
+    const r = {
+      sel: c.sel || (idx+1),
+      ref: c.ref || '',
+      antigen: c.antigen || {},
+      results: byCell[id] || { '20c':'?','37c':'?','iat':'?','gel':'?' }
+    };
+    r.reactive = isReactive(r.results['20c']) || isReactive(r.results['37c']) || isReactive(r.results['iat']) || isReactive(r.results['gel']);
+    r.reactiveTests = [];
+    if (isReactive(r.results['20c'])) r.reactiveTests.push('20°C');
+    if (isReactive(r.results['37c'])) r.reactiveTests.push('37°C');
+    if (isReactive(r.results['iat'])) r.reactiveTests.push('IAT');
+    if (isReactive(r.results['gel'])) r.reactiveTests.push('Gel');
+    return r;
+  });
+
+  const reactiveRows = rows.filter(r => r.reactive);
+  const nonReactiveRows = rows.filter(r => !r.reactive);
+
+  // build overall reactivity summary (which tests showed reactivity among any reactive rows)
+  const overallReactiveTests = new Set();
+  reactiveRows.forEach(r => r.reactiveTests.forEach(t => overallReactiveTests.add(t)));
+  const overallTestsList = Array.from(overallReactiveTests);
+
+  // antigen keys to consider (same order as header)
+  const antigenKeys = ['D','C','E','c','e','K','k','Fya','Fyb','Jka','Jkb','M','N','S','s','P1','Lea','Leb','Lua','Lub'];
+
+  // Strict rule: antigen must be PRESENT in ALL reactiveRows AND ABSENT in ALL nonReactiveRows
+  const strictCandidates = [];
+  antigenKeys.forEach(key => {
+    if (reactiveRows.length === 0) return;
+    // check presence in all reactive rows
+    const presentAllReactive = reactiveRows.every(r => antigenPresent(r.antigen[key]));
+    // check absent in all non-reactive rows
+    const absentAllNonReactive = nonReactiveRows.every(r => !antigenPresent(r.antigen[key]));
+    if (presentAllReactive && absentAllNonReactive) {
+      strictCandidates.push({ antigen: key, reason: 'Matches strict pattern' });
+    }
+  });
+
+  // Format interpretasi per sel (text)
+  const interpretPerRow = rows.map(r => {
+    const tests = r.reactiveTests.length ? r.reactiveTests.join(', ') : '-';
+    return `Sel ${r.sel} (Ref ${r.ref}): ${r.reactive ? 'REAKTIF' : 'NEGATIF'} — reaksi pada: ${tests}`;
+  }).join('\n');
+
+  // Build conclusion text
+  let conclusion = '';
+  if (reactiveRows.length === 0) {
+    conclusion = 'Tidak ditemukan sel reaktif pada suhu 20°/37°C/IAT/Gel.';
+  } else {
+    if (strictCandidates.length === 0) {
+      conclusion = 'Tidak ditemukan kandidat antibodi spesifik dengan aturan strict (antigen harus ada pada semua sel reaktif dan tidak ada pada sel non-reaktif). Pertimbangkan pemeriksaan lanjutan.';
+    } else {
+      const names = strictCandidates.map(c => `anti-${c.antigen}`).join(', ');
+      conclusion = `Ditemukan kemungkinan adanya antibodi di dalam serum pasien yang reaktif pada ${overallTestsList.join(', ') || '-'}.\nSpesifikasi antibodi: ${names}.`;
+    }
+  }
+
+  // recommendations
+  const recommendations = [];
+  if (strictCandidates.length > 0) {
+    recommendations.push('Lakukan identifikasi antibodi (panel ID) terhadap kandidat teratas untuk konfirmasi.');
+  } else {
+    recommendations.push('Pertimbangkan pemeriksaan panel identifikasi lanjutan atau ulangi uji dengan panel lain.');
+  }
+  recommendations.push('Periksa riwayat transfusi/kehamilan dan pastikan crossmatch jika diperlukan.');
+
+    // contoh panggilan showAnalysis (sesuaikan dengan objek yang sudah ada)
+  showAnalysis({
+    invalid: false,
+    interpretPerRow,
+    reactiveCount: reactiveRows.length,
+    totalCount: rows.length,
+    candidates: strictCandidates,
+    conclusion,
+    recommendations,
+    auto: {
+      status: autoStatus,
+      values: autoVals,
+      causes: autoCauses
+    }
+  });
+}
+
+
+// showAnalysis versi menyesuaikan format contoh (lebih singkat dan rapi)
+function showAnalysis(out){
+  let a = document.getElementById('analysisOut');
+  if(!a){
+    a = document.createElement('div');
+    a.id = 'analysisOut';
+    a.style.marginTop = '12px';
+    a.style.padding = '12px';
+    a.style.border = '1px solid #e6edf3';
+    a.style.background = '#fff';
+    a.style.borderRadius = '8px';
+    document.querySelector('.card').appendChild(a);
+  }
+  
+  let html = '';
+  
+  html += `<div style="margin-top:8px;"><strong>Kemungkinan antibodi:</strong></div>`;
+  if (out.candidates && out.candidates.length > 0) {
+    html += `<div>`;
+    out.candidates.forEach(c => {
+      html += `<span class="antibody-badge">${c}</span>`;
+    });
+    html += `</div>`;
+  } else {
+    html += `<div>Tidak ada kandidat antibodi yang terdeteksi.</div>`;
+  }
+  // display auto control summary
+  html += `<div style="margin-top:10px;font-weight:700">Auto Kontrol</div>`;
+  if (out.auto) {
+    html += `<div style="margin-top:6px">Status: <b>${out.auto.status}</b></div>`;
+    if (out.auto.status === 'Positif') {
+      html += `<div style="margin-top:6px"><em>Kemungkinan penyebab:</em><ul>`;
+      out.auto.causes.forEach(c => html += `<li>${c}</li>`);
+      html += `</ul></div>`;
+      html += `<div style="margin-top:6px;color:#9a3b00">Catatan: Auto kontrol positif bisa menunjukkan adanya autoantibodi atau faktor nonspesifik; pertimbangkan pemeriksaan lanjutan (auto-adsorpsi, pemanasan serum, dsb).</div>`;
+    } else {
+      html += `<div style="margin-top:6px">Tidak ditemukan reaksi pada auto kontrol.</div>`;
+    }
+  }
+
+  html += `<div style="margin-top:10px;font-weight:700">Kesimpulan / rekomendasi</div>`;
+  html += `<div style="margin-top:6px">${out.conclusion.replace(/\n/g,'<br>')}</div>`;
+  html += `<div style="margin-top:8px"><em>Rekomendasi:</em><ul>`;
+  out.recommendations.forEach(r => html += `<li>${r}</li>`);
+  html += `</ul></div>`;
+
+  a.innerHTML = html;
+
+}
+
+document.getElementById('refreshBtn').addEventListener('click', refresh);
+document.getElementById('analyzeBtn').addEventListener('click', analyzePanel);
+
+document.getElementById('saveBtn').addEventListener('click', ()=>{
+  const selects = document.querySelectorAll('select[data-cell]');
+  const out = {};
+  selects.forEach(s => {
+    const id = s.dataset.cell;
+    out[id] = out[id] || {};
+    out[id][s.dataset.type] = s.value;
+  });
+  localStorage.setItem('panel_local', JSON.stringify(out));
+  alert('Tersimpan ke localStorage');
+});
+document.getElementById('loadBtn').addEventListener('click', ()=>{
+  const raw = localStorage.getItem('panel_local');
+  if(!raw) return alert('Tidak ada data tersimpan');
+  const obj = JSON.parse(raw);
+  Object.keys(obj).forEach(k => {
+    const r = obj[k];
+    Object.keys(r).forEach(t => {
+      const s = document.querySelector('select[data-cell="'+k+'"][data-type="'+t+'"]');
+      if(s) s.value = r[t];
+    });
+  });
+  alert('Data dimuat dari localStorage');
+});
+
+document.getElementById('exportBtn').addEventListener('click', ()=>{
+  const selects = document.querySelectorAll('select[data-cell]');
+  const out = {};
+  selects.forEach(s => {
+    const id = s.dataset.cell;
+    out[id] = out[id] || {};
+    out[id][s.dataset.type] = s.value;
+  });
+  const b = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'panel_results.json'; a.click(); URL.revokeObjectURL(a.href);
+});
+
+window.addEventListener('load', refresh);
+
+</script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
