@@ -24,6 +24,9 @@
     border-radius: 4px;
     font-weight: bold;
     font-size: 14px;
+  .highlight-antigen {
+    background-color: rgba(255, 0, 0, 0.2);
+  }
   }
 </style>
 </head>
@@ -191,6 +194,32 @@ function analyzePanel() {
     byCell[id] = byCell[id] || {};
     byCell[id][s.dataset.type] = s.value;
   });
+  
+function highlightAntigenColumns(candidates) {
+  // Ambil header tabel
+  const table = document.querySelector("table"); // sesuaikan jika pakai id/class spesifik
+  if (!table) return;
+
+  const headerCells = table.querySelectorAll("thead tr th"); 
+  const bodyRows = table.querySelectorAll("tbody tr");
+
+  candidates.forEach(candidate => {
+    // Nama antigen disesuaikan dengan penamaan header
+    const antigenName = candidate.replace("anti-", "").toUpperCase(); 
+    headerCells.forEach((th, colIndex) => {
+      const headerText = th.innerText.trim().toUpperCase();
+      if (headerText === antigenName) {
+        // Tambah class ke header
+        th.classList.add("highlight-antigen");
+        // Tambah class ke semua sel di kolom ini
+        bodyRows.forEach(row => {
+          const cell = row.children[colIndex];
+          if (cell) cell.classList.add("highlight-antigen");
+        });
+      }
+    });
+  });
+}
 
   // check autokontrol
    // ambil auto-control values
@@ -394,6 +423,7 @@ window.addEventListener('load', refresh);
 </script>
 </body>
 </html>
+
 
 
 
