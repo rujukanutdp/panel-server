@@ -315,15 +315,15 @@ function showAnalysis(out){
   
   let html = '';
   
-  html += `<div style="margin-top:8px;font-weight:700">Kemungkinan antibodi:</div>`;
-  if(out.candidates && out.candidates.length){
-    html += '<ul style="margin-top:6px">';
-    out.candidates.forEach(c=>{
-      html += `<li><b>anti-${c.antigen}</b> — Very likely</li>`;
-    });
-    html += '</ul>';
-  } else {
-    html += `<div style="margin-top:6px">- Tidak ditemukan kemungkinan adanya antibody yang bebas di dalam serum pasien.</div>`;
+  html += `<div style="margin-top:8px;"><strong>Kemungkinan antibodi:</strong></div>`;
+  if (out.candidates && out.candidates.length > 0) {
+    html += `<div>`;
+    out.candidates.forEach(c => {
+    html += `<span class="antibody-badge">${c}</span>`;
+  });
+  html += `</div>`;
+    } else {
+      html += `<div>Tidak ada kandidat antibodi yang terdeteksi.</div>`;
   }
   // display auto control summary
   html += `<div style="margin-top:10px;font-weight:700">Auto Kontrol</div>`;
@@ -394,6 +394,7 @@ window.addEventListener('load', refresh);
 </script>
 </body>
 </html>
+
 
 
 
