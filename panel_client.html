@@ -319,11 +319,11 @@ function showAnalysis(out){
   if (out.candidates && out.candidates.length > 0) {
     html += `<div>`;
     out.candidates.forEach(c => {
-    html += `<span class="antibody-badge">${c}</span>`;
-  });
-  html += `</div>`;
-    } else {
-      html += `<div>Tidak ada kandidat antibodi yang terdeteksi.</div>`;
+      html += `<span class="antibody-badge">${c}</span>`;
+    });
+    html += `</div>`;
+  } else {
+    html += `<div>Tidak ada kandidat antibodi yang terdeteksi.</div>`;
   }
   // display auto control summary
   html += `<div style="margin-top:10px;font-weight:700">Auto Kontrol</div>`;
@@ -394,6 +394,7 @@ window.addEventListener('load', refresh);
 </script>
 </body>
 </html>
+
 
 
 
