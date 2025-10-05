@@ -41,6 +41,8 @@
   </div>
 
 <script>
+let lastPanelData = null;
+
 async function fetchPanel(){
   const resp = await fetch('/panel.json');
   if(!resp.ok) throw new Error('Gagal fetch /panel.json');
@@ -60,11 +62,20 @@ function mkSelect(cell, type){
   return s;
 }
 
+function antigenPresent(val){
+  if(!val) return false;
+  const v = String(val).trim();
+  if(v === '' || v === '0' || v.toLowerCase() === 'negatif' || v === '-') return false;
+  // treat '+' or any non-zero string as presence
+  return true;
+}
+
 function renderTable(j){
   if(!j || !j.ok) {
     document.getElementById('tableWrap').innerHTML = '<div style="padding:12px;">Tidak ada data (periksa antigram.xlsx)</div>';
     return;
   }
+  lastPanelData = j.data; // SIMPAN untuk analisis
   const data = j.data;
   const wrap = document.getElementById('tableWrap');
   wrap.innerHTML = '';
@@ -144,32 +155,181 @@ async function refresh(){
   }
 }
 
-// simple analyze function
+// simple reactive test (nilai dianggap reaktif)
 function isReactive(v){
   if(!v) return false;
-  if(['?','Negatif','n.t'].includes(v)) return false;
-  return ['w','1+','2+','3+','4+'].includes(v);
+  const vv = String(v).trim().toLowerCase();
+  if(vv === '?' || vv === 'negatif' || vv === 'n.t' || vv === 'nt') return false;
+  // treat these as reactive
+  if(['w','m.f','mf','mf.','mf'].includes(vv)) return true;
+  if(vv.startsWith('1+') || vv.startsWith('2+') || vv.startsWith('3+') || vv.startsWith('4+')) return true;
+  if(vv === '1+' || vv === '2+' || vv === '3+' || vv === '4+') return true;
+  // accept short forms like '1+','2+','3+','4+'
+  if(/[1-4]\+/.test(vv)) return true;
+  // accept plain '+' if ever used
+  if(vv === '+') return true;
+  return false;
+}
+
+// ANALYSIS core: cari antibodi berdasarkan pola antigen pada sel yang reaktif
+function analyzePanel() {
+  // ambil semua select values
+  const selects = Array.from(document.querySelectorAll('select[data-cell]'));
+  const byCell = {}; // id -> { '20c': val, ... }
+  selects.forEach(s => {
+    const id = s.dataset.cell;
+    byCell[id] = byCell[id] || {};
+    byCell[id][s.dataset.type] = s.value;
+  });
+
+  // check autokontrol
+  const autoVals = selects.filter(s => s.dataset.cell === 'auto').map(s => s.value);
+  const autoReaktif = autoVals.some(isReactive);
+  if (autoReaktif) {
+    showAnalysis({
+      invalid: true,
+      message: 'Auto Kontrol reaktif → hasil TIDAK VALID. Periksa prosedur/reaktan.'
+    });
+    return;
+  }
+
+  // build rows from lastPanelData and byCell
+  if(!lastPanelData) return alert('Tidak ada data panel (refresh dulu).');
+  const cells = lastPanelData.cells || [];
+  const rows = cells.map((c, idx) => {
+    const id = String(idx+1);
+    const r = {
+      sel: c.sel || (idx+1),
+      ref: c.ref || '',
+      antigen: c.antigen || {},
+      results: byCell[id] || { '20c':'?','37c':'?','iat':'?','gel':'?' }
+    };
+    r.reactive = isReactive(r.results['37c']) || isReactive(r.results['iat']) || isReactive(r.results['gel']);
+    // record which tests reactive
+    r.reactiveTests = [];
+    if (isReactive(r.results['20c'])) r.reactiveTests.push('20°C');
+    if (isReactive(r.results['37c'])) r.reactiveTests.push('37°C');
+    if (isReactive(r.results['iat'])) r.reactiveTests.push('IAT');
+    if (isReactive(r.results['gel'])) r.reactiveTests.push('Gel');
+    return r;
+  });
+
+  const reactiveRows = rows.filter(r => r.reactive);
+  const nonReactiveRows = rows.filter(r => !r.reactive);
+
+  // Antigen keys to test (use keys that exist in antigen object)
+  const antigenKeys = ['D','C','E','c','e','K','k','Fya','Fyb','Jka','Jkb','M','N','S','s','P1','Lea','Leb','Lua','Lub'];
+
+  // scoring: for each antigen, count reactive_with_ant and nonreactive_with_ant
+  const candidates = [];
+  antigenKeys.forEach(key => {
+    let reactive_with = 0, reactive_total = reactiveRows.length;
+    let non_with = 0, non_total = nonReactiveRows.length;
+    reactiveRows.forEach(r => { if (antigenPresent(r.antigen[key])) reactive_with++; });
+    nonReactiveRows.forEach(r => { if (antigenPresent(r.antigen[key])) non_with++; });
+
+    // define rules:
+    // Very likely: reactive_with >=1 AND non_with === 0 AND reactive_with >= 1
+    // Probable: reactive_with >=1 AND reactive_with / Math.max(1, reactive_total) >= 0.6 && non_with <= Math.max(1, Math.floor(reactive_with * 0.4))
+    // Weak: reactive_with >=1 but non_with > 0 (ambiguous) or reactive proportion low
+    let confidence = null;
+    if (reactive_with >= 1 && non_with === 0 && reactive_with >= 1) confidence = 'Very likely';
+    else if (reactive_with >= 1 && (reactive_total>0 && (reactive_with / reactive_total) >= 0.6) && non_with <= Math.max(1, Math.floor(reactive_with * 0.4))) confidence = 'Probable';
+    else if (reactive_with >= 1) confidence = 'Possible';
+    if (confidence) {
+      candidates.push({
+        antigen: key,
+        reactive_with,
+        reactive_total,
+        non_with,
+        non_total,
+        confidence
+      });
+    }
+  });
+
+  // sort candidates by confidence and counts
+  const order = { 'Very likely': 3, 'Probable': 2, 'Possible': 1 };
+  candidates.sort((a,b) => (order[b.confidence] - order[a.confidence]) || (b.reactive_with - a.reactive_with));
+
+  // Prepare textual summary
+  const interpretPerRow = rows.map(r => {
+    return `Sel ${r.sel} (Ref ${r.ref}): ${r.reactive ? 'REAKTIF' : 'NEGATIF'} — reaksi pada: ${r.reactiveTests.join(', ') || '-'}`;
+  }).join('\n');
+
+  let conclusion = '';
+  if (candidates.length === 0) {
+    conclusion = 'Tidak ditemukan pola spesifik antibodi berdasarkan sel reaktif yang diisi. Pertimbangkan pemeriksaan identifikasi lanjutan.';
+  } else {
+    const top = candidates[0];
+    // build list text
+    const listText = candidates.map(c => `anti-${c.antigen} — ${c.confidence} (reaktif pada ${c.reactive_with}/${c.reactive_total} sel, non-reaktif tapi antigen ada di ${c.non_with}/${c.non_total} sel)`).join('\n');
+    conclusion = `Kemungkinan antibodi (urut prioritas):\n${listText}`;
+  }
+
+  // recommendations
+  const recommendations = [];
+  if (candidates.length > 0) recommendations.push('Lakukan panel identifikasi konfirmasi (ID) terhadap antibodi teratas.');
+  else recommendations.push('Jika klinis mencurigakan, ulangi pemeriksaan atau pakai panel tambahan.');
+  recommendations.push('Periksa sejarah transfusi/kehamilan, crossmatch sebelum transfusi.');
+  if (autoReaktif) recommendations.push('Auto kontrol reaktif → Perlu evaluasi lebih lanjut (autoantibodi).');
+
+  // show output
+  showAnalysis({
+    invalid: false,
+    interpretPerRow,
+    reactiveCount: reactiveRows.length,
+    totalCount: rows.length,
+    candidates,
+    conclusion,
+    recommendations
+  });
+}
+
+function showAnalysis(out){
+  // create or update analysis area
+  let a = document.getElementById('analysisOut');
+  if(!a){
+    a = document.createElement('div');
+    a.id = 'analysisOut';
+    a.style.marginTop = '12px';
+    a.style.padding = '12px';
+    a.style.border = '1px solid #e6edf3';
+    a.style.background = '#fff';
+    a.style.borderRadius = '8px';
+    document.querySelector('.card').appendChild(a);
+  }
+  if(out.invalid){
+    a.innerHTML = `<div style="color:#9f1239;font-weight:700">Hasil TIDAK VALID — Auto kontrol reaktif</div><div style="margin-top:6px">${out.message}</div>`;
+    return;
+  }
+
+  let html = '';
+  html += `<div style="font-weight:700;margin-bottom:6px">Interpretasi per sel</div>`;
+  html += `<pre style="white-space:pre-wrap;background:#f8fafc;padding:8px;border-radius:6px;margin-bottom:8px">${out.interpretPerRow}</pre>`;
+  html += `<div style="font-weight:700;margin-bottom:6px">Ringkasan</div>`;
+  html += `<div>Sel reaktif: <b>${out.reactiveCount}</b> / ${out.totalCount}</div>`;
+  html += `<div style="margin-top:8px;font-weight:700">Kemungkinan antibodi:</div>`;
+  if(out.candidates && out.candidates.length){
+    html += '<ul style="margin-top:6px">';
+    out.candidates.forEach(c=>{
+      html += `<li><b>anti-${c.antigen}</b> — ${c.confidence} (reaktif ${c.reactive_with}/${c.reactive_total}, antigen juga pada non-reaktif ${c.non_with}/${c.non_total})</li>`;
+    });
+    html += '</ul>';
+  } else {
+    html += `<div style="margin-top:6px">- Tidak ada kandidat spesifik ditemukan.</div>`;
+  }
+  html += `<div style="margin-top:10px;font-weight:700">Kesimpulan / rekomendasi</div>`;
+  html += `<div style="margin-top:6px">${out.conclusion.replace(/\n/g,'<br>')}</div>`;
+  html += `<div style="margin-top:8px"><em>Rekomendasi:</em><ul>`;
+  out.recommendations.forEach(r => html += `<li>${r}</li>`);
+  html += `</ul></div>`;
+
+  a.innerHTML = html;
 }
 
 document.getElementById('refreshBtn').addEventListener('click', refresh);
-document.getElementById('analyzeBtn').addEventListener('click', ()=>{
-  const selects = document.querySelectorAll('select[data-cell]');
-  const data = {};
-  selects.forEach(s => {
-    const id = s.dataset.cell;
-    data[id] = data[id] || {};
-    data[id][s.dataset.type] = s.value;
-  });
-  const autos = Array.from(document.querySelectorAll('select[data-cell="auto"]')).map(s => s.value);
-  if (autos.some(isReactive)) return alert('HASIL: TIDAK VALID (Auto kontrol reaktif)');
-  let any=false;
-  for(const k in data){
-    if (k === 'auto') continue;
-    const r = data[k];
-    if (isReactive(r['iat']) || isReactive(r['37c']) || isReactive(r['gel'])) { any=true; break; }
-  }
-  alert(any ? 'SKRINING: POSITIF' : 'SKRINING: NEGATIF');
-});
+document.getElementById('analyzeBtn').addEventListener('click', analyzePanel);
 
 document.getElementById('saveBtn').addEventListener('click', ()=>{
   const selects = document.querySelectorAll('select[data-cell]');
@@ -209,6 +369,8 @@ document.getElementById('exportBtn').addEventListener('click', ()=>{
 });
 
 window.addEventListener('load', refresh);
+
 </script>
 </body>
 </html>
+
