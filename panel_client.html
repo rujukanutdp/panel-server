@@ -247,7 +247,7 @@ function analyzePanel() {
   // Build conclusion text
   let conclusion = '';
   if (reactiveRows.length === 0) {
-    conclusion = 'Tidak ditemukan sel reaktif pada 37°C/IAT/Gel.';
+    conclusion = 'Tidak ditemukan sel reaktif pada suhu 20°/37°C/IAT/Gel.';
   } else {
     if (strictCandidates.length === 0) {
       conclusion = 'Tidak ditemukan kandidat antibodi spesifik dengan aturan strict (antigen harus ada pada semua sel reaktif dan tidak ada pada sel non-reaktif). Pertimbangkan pemeriksaan lanjutan.';
@@ -369,6 +369,7 @@ window.addEventListener('load', refresh);
 </script>
 </body>
 </html>
+
 
 
 
