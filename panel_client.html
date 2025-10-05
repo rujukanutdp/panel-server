@@ -183,14 +183,19 @@ function analyzePanel() {
   });
 
   // check autokontrol
+   // ambil auto-control values
   const autoVals = selects.filter(s => s.dataset.cell === 'auto').map(s => s.value);
-  const autoReaktif = autoVals.some(isReactive);
-  if (autoReaktif) {
-    showAnalysis({
-      invalid: true,
-      message: 'Auto Kontrol reaktif → hasil TIDAK VALID. Periksa prosedur/reaktan.'
-    });
-    return;
+  // status auto kontrol: positif jika ada nilai reaktif di salah satu test
+  const autoPositive = autoVals.some(isReactive);
+  const autoStatus = autoPositive ? 'Positif' : 'Negatif';
+
+  // keterangan kemungkinan penyebab jika auto positif (sesuai permintaan)
+  const autoCauses = [];
+  if (autoPositive) {
+    autoCauses.push('autoantibodi');
+    autoCauses.push('alloantibodi terhadap antigen dengan fenotipe sama');
+    autoCauses.push('cold agglutinin');
+    autoCauses.push('reaksi nonspesifik (mis. hiperprotein, obat, dll)');
   }
 
   if(!lastPanelData) return alert('Tidak ada data panel (refresh dulu).');
@@ -266,7 +271,7 @@ function analyzePanel() {
   }
   recommendations.push('Periksa riwayat transfusi/kehamilan dan pastikan crossmatch jika diperlukan.');
 
-  // show
+    // contoh panggilan showAnalysis (sesuaikan dengan objek yang sudah ada)
   showAnalysis({
     invalid: false,
     interpretPerRow,
@@ -274,7 +279,12 @@ function analyzePanel() {
     totalCount: rows.length,
     candidates: strictCandidates,
     conclusion,
-    recommendations
+    recommendations,
+    auto: {
+      status: autoStatus,
+      values: autoVals,
+      causes: autoCauses
+    }
   });
 }
 
@@ -292,11 +302,7 @@ function showAnalysis(out){
     a.style.borderRadius = '8px';
     document.querySelector('.card').appendChild(a);
   }
-  if(out.invalid){
-    a.innerHTML = `<div style="color:#9f1239;font-weight:700">Hasil TIDAK VALID — Auto kontrol reaktif</div><div style="margin-top:6px">${out.message}</div>`;
-    return;
-  }
-
+  
   let html = '';
   html += `<div style="font-weight:700;margin-bottom:6px">Interpretasi per sel</div>`;
   html += `<pre style="white-space:pre-wrap;background:#f8fafc;padding:8px;border-radius:6px;margin-bottom:8px">${out.interpretPerRow}</pre>`;
@@ -312,6 +318,19 @@ function showAnalysis(out){
     html += '</ul>';
   } else {
     html += `<div style="margin-top:6px">- Tidak ada kandidat spesifik (strict matching).</div>`;
+  }
+  // display auto control summary
+  html += `<div style="margin-top:10px;font-weight:700">Auto Kontrol</div>`;
+  if (out.auto) {
+    html += `<div style="margin-top:6px">Status: <b>${out.auto.status}</b></div>`;
+    if (out.auto.status === 'Positif') {
+      html += `<div style="margin-top:6px"><em>Kemungkinan penyebab:</em><ul>`;
+      out.auto.causes.forEach(c => html += `<li>${c}</li>`);
+      html += `</ul></div>`;
+      html += `<div style="margin-top:6px;color:#9a3b00">Catatan: Auto kontrol positif bisa menunjukkan adanya autoantibodi atau faktor nonspesifik; pertimbangkan pemeriksaan lanjutan (auto-adsorpsi, pemanasan serum, dsb).</div>`;
+    } else {
+      html += `<div style="margin-top:6px">Tidak ditemukan reaksi pada auto kontrol.</div>`;
+    }
   }
 
   html += `<div style="margin-top:10px;font-weight:700">Kesimpulan / rekomendasi</div>`;
@@ -369,6 +388,7 @@ window.addEventListener('load', refresh);
 </script>
 </body>
 </html>
+
 
 
 
