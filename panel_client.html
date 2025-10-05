@@ -304,11 +304,7 @@ function showAnalysis(out){
   }
   
   let html = '';
-  html += `<div style="font-weight:700;margin-bottom:6px">Interpretasi per sel</div>`;
-  html += `<pre style="white-space:pre-wrap;background:#f8fafc;padding:8px;border-radius:6px;margin-bottom:8px">${out.interpretPerRow}</pre>`;
-  html += `<div style="font-weight:700;margin-bottom:6px">Ringkasan</div>`;
-  html += `<div>Sel reaktif: <b>${out.reactiveCount}</b> / ${out.totalCount}</div>`;
-
+  
   html += `<div style="margin-top:8px;font-weight:700">Kemungkinan antibodi:</div>`;
   if(out.candidates && out.candidates.length){
     html += '<ul style="margin-top:6px">';
@@ -317,7 +313,7 @@ function showAnalysis(out){
     });
     html += '</ul>';
   } else {
-    html += `<div style="margin-top:6px">- Tidak ada kandidat spesifik (strict matching).</div>`;
+    html += `<div style="margin-top:6px">- Tidak ditemukan kemungkinan adanya antibody yang bebas di dalam serum pasien.</div>`;
   }
   // display auto control summary
   html += `<div style="margin-top:10px;font-weight:700">Auto Kontrol</div>`;
@@ -388,6 +384,7 @@ window.addEventListener('load', refresh);
 </script>
 </body>
 </html>
+
 
 
 
