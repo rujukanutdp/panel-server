@@ -3,45 +3,54 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Panel Skrining — Client</title>
+<title>Panel Skrining — Client (Dinamis dari Excel)</title>
 <style>
-  body{font-family:Inter,Arial,Helvetica,sans-serif;margin:12px;background:#f5f7fb;color:#0b1220}
-  .card{background:#fff;padding:14px;border-radius:10px;box-shadow:0 8px 24px rgba(2,6,23,0.06)}
-  .table-wrap{overflow:auto;border:1px solid #e2e8f0;border-radius:8px;margin-top:10px}
-  table{border-collapse:collapse;width:100%;min-width:1100px;table-layout:fixed}
-  th,td{padding:6px;border-right:1px solid rgba(15,23,42,0.04);text-align:center;white-space:nowrap}
-  th{background:#f8fafc;position:sticky;top:0}
+  :root{
+    --bg:#f5f7fb;
+    --card:#ffffff;
+    --muted:#64748b;
+    --accent:#2563eb;
+    --border:#e2e8f0;
+    --danger:#d9534f;
+  }
+  html,body{height:100%}
+  body{
+    font-family:Inter,Arial,Helvetica,sans-serif;
+    margin:12px;
+    background:var(--bg);
+    color:#0b1220;
+  }
+  .card{background:var(--card);padding:14px;border-radius:10px;box-shadow:0 8px 24px rgba(2,6,23,0.06)}
+  .table-wrap{overflow:auto;border:1px solid var(--border);border-radius:8px;margin-top:10px}
+  table{border-collapse:collapse;width:100%;min-width:900px;table-layout:fixed;font-size:13px}
+  th,td{padding:6px;border-right:1px solid rgba(15,23,42,0.04);text-align:center;white-space:nowrap;vertical-align:middle}
+  thead th{background:#f8fafc;position:sticky;top:0;z-index:2}
   select{padding:4px 6px;border-radius:6px}
-  .controls{margin-top:10px;display:flex;gap:8px;justify-content:space-between}
-  button{padding:8px 12px;border-radius:6px;background:#2563eb;color:#fff;border:0;cursor:pointer}
-  .small{font-size:13px;color:#64748b}
-  .antibody-badge {
-    display: inline-block;
-    background-color: #d9534f; /* merah */
-    color: white;
-    padding: 4px 10px;
-    margin: 3px;
-    border-radius: 4px;
-    font-weight: bold;
-    font-size: 14px;
-  }
-  .highlight-antigen {
-    background-color: rgba(255, 0, 0, 0.2);
-  }
+  .controls{margin-top:10px;display:flex;gap:8px;justify-content:space-between;align-items:center}
+  button{padding:8px 12px;border-radius:6px;background:var(--accent);color:#fff;border:0;cursor:pointer}
+  .small{font-size:13px;color:var(--muted)}
+  pre.json{background:#0b1220;color:#e6eef8;padding:8px;border-radius:6px}
+  .antibody-badge { display:inline-block;background-color:var(--danger);color:white;padding:4px 10px;margin:3px;border-radius:4px;font-weight:700;font-size:13px; }
+  .highlight-antigen{background-color:rgba(255,0,0,0.12) !important}
+  .meta{margin-top:8px;color:var(--muted);font-size:13px}
+  .analysis{margin-top:12px;padding:10px;border-radius:8px;background:#fff;border:1px solid #e6edf3}
+  .note{color:var(--muted);font-size:13px;margin-top:6px}
+  @media (max-width:700px){ table{min-width:800px;font-size:12px} }
 </style>
 </head>
 <body>
-  <div class="card">
-    <h2>Panel Skrining — (dari server)</h2>
+  <div class="card" role="main">
+    <h2>Panel Skrining — Client</h2>
+
     <div style="display:flex;gap:8px;align-items:center">
       <button id="refreshBtn">Refresh data</button>
-      <div id="meta" class="small"></div>
+      <div id="meta" class="meta">Memuat...</div>
     </div>
 
-    <div id="tableWrap" class="table-wrap"></div>
+    <div id="tableWrap" class="table-wrap" role="region" aria-label="Panel skrining"></div>
 
-    <div class="controls">
-      <div>
+    <div class="controls" style="margin-top:8px">
+      <div style="display:flex;gap:8px;align-items:center">
         <button id="analyzeBtn">Analyze</button>
         <button id="saveBtn">Save local</button>
         <button id="loadBtn">Load local</button>
@@ -50,18 +59,33 @@
       <div id="status" class="small"></div>
     </div>
 
-    <pre id="jsonOut" style="display:none;background:#0b1220;color:#e6eef8;padding:8px;border-radius:6px"></pre>
+    <div id="analysisContainer"></div>
+    <pre id="jsonOut" class="json" style="display:none"></pre>
   </div>
 
 <script>
-let lastPanelData = null;
+/*
+  panel_client.html (final dynamic)
+  - expects server endpoint /panel.json (server.js already provides)
+  - Excel format: first column = Sel (or cell label), subsequent header columns = antigen names
+  - Script reads header and builds table dynamically
+  - Columns for tests (20°C, 37°C, IAT, Gel) are appended at right
+  - Auto control row present
+  - Analyze uses strict logic: antigen present in ALL reactive rows AND absent in ALL non-reactive rows -> candidate
+  - Candidate antigen columns highlighted (entire column)
+*/
 
+let lastPanelData = null;
+let antigenKeys = []; // ordered antigen column names as rendered (from Excel header slice)
+
+// Utility: fetch /panel.json
 async function fetchPanel(){
   const resp = await fetch('/panel.json');
   if(!resp.ok) throw new Error('Gagal fetch /panel.json');
   return resp.json();
 }
 
+// Create select element for test inputs
 function mkSelect(cell, type){
   const opts = ['?','Negatif','m.f','w','1+','2+','3+','4+','n.t'];
   const s = document.createElement('select');
@@ -75,59 +99,116 @@ function mkSelect(cell, type){
   return s;
 }
 
+// interpret an antigen present value from Excel cell
 function antigenPresent(val){
-  if(!val) return false;
+  if(val === undefined || val === null) return false;
   const v = String(val).trim();
   if(v === '' || v === '0' || v.toLowerCase() === 'negatif' || v === '-') return false;
-  // treat '+' or any non-zero string as presence
-  return true;
+  return true; // consider anything else as present (including '+', '1+' etc.)
 }
 
-function renderTable(j){
-  if(!j || !j.ok) {
-    document.getElementById('tableWrap').innerHTML = '<div style="padding:12px;">Tidak ada data (periksa antigram.xlsx)</div>';
+// Normalize header key to string
+function normalizeKey(k){
+  return String(k||'').trim();
+}
+
+// Render table using header from /panel.json
+function renderTable(panelJson){
+  const wrap = document.getElementById('tableWrap');
+  if(!panelJson || !panelJson.ok){
+    wrap.innerHTML = '<div style="padding:12px;">Tidak ada data (periksa antigram.xlsx)</div>';
+    lastPanelData = null;
+    document.getElementById('meta').textContent = 'Tidak ada data';
     return;
   }
-  lastPanelData = j.data; // SIMPAN untuk analisis
-  const data = j.data;
-  const wrap = document.getElementById('tableWrap');
+
+  lastPanelData = panelJson.data;
+  const header = Array.isArray(panelJson.header) ? panelJson.header.map(h => normalizeKey(h)) : [];
+  const cells = panelJson.data.cells || [];
+
+  // Determine antigen keys:
+  // We assume header[0] is 'Sel' (or similar). Antigens start at header[1].
+  // If header is missing or too short, fallback to union of antigen keys from first cell.
+  antigenKeys = [];
+  if(header.length >= 2){
+    // take header slice from 1 until we hit an obvious tests column (like 20, 37, iat, gel) or end
+    const testsLike = ['20','20°c','20°','20nc','37','37°c','37°','iat','gel','hasil','hasil pemeriksaan'];
+    for(let i = 1; i < header.length; i++){
+      const low = header[i].toLowerCase();
+      // break if header looks like test names
+      if(testsLike.some(t => low.includes(t))) break;
+      antigenKeys.push(header[i]);
+    }
+  }
+
+  // if still empty, build from union of antigen properties in cells
+  if(antigenKeys.length === 0 && cells.length){
+    const set = new Set();
+    cells.forEach(c => {
+      const ant = c.antigen || {};
+      Object.keys(ant).forEach(k => {
+        if(k && normalizeKey(k) !== '') set.add(normalizeKey(k));
+      });
+    });
+    antigenKeys = Array.from(set);
+  }
+
+  // If still empty, nothing to show
+  if(antigenKeys.length === 0){
+    wrap.innerHTML = '<div style="padding:12px;">Tidak ditemukan kolom antigen dalam file Excel.</div>';
+    document.getElementById('meta').textContent = `Merk: ${panelJson.data.meta.merk||'-'}  Lot: ${panelJson.data.meta.lot||'-'}  Exp: ${panelJson.data.meta.exp||'-'}`;
+    return;
+  }
+
+  // build table
   wrap.innerHTML = '';
   const table = document.createElement('table');
 
-  // header (two rows)
+  // header row 1
   const thead = document.createElement('thead');
   const tr1 = document.createElement('tr');
-  const thSel = document.createElement('th'); thSel.rowSpan=2; thSel.textContent='Sel'; tr1.appendChild(thSel);
-  const thRef = document.createElement('th'); thRef.rowSpan=2; thRef.textContent='Ref.'; tr1.appendChild(thRef);
-  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:5,textContent:'Rh'}));
-  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:2,textContent:'Kell'}));
-  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:2,textContent:'Duffy'}));
-  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:2,textContent:'Kidd'}));
-  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:4,textContent:'MNS'}));
-  const thP1 = document.createElement('th'); thP1.rowSpan=2; thP1.textContent='P1'; tr1.appendChild(thP1);
-  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:2,textContent:'Lewis'}));
-  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:2,textContent:'Lutheran'}));
-  const thNo = document.createElement('th'); thNo.rowSpan=2; thNo.textContent='No'; tr1.appendChild(thNo);
-  tr1.appendChild(Object.assign(document.createElement('th'),{colSpan:4,textContent:'Hasil Pemeriksaan'}));
+  const thSel = document.createElement('th'); thSel.rowSpan = 2; thSel.textContent = 'Sel'; tr1.appendChild(thSel);
+
+  // Antigen group header spanning antigenKeys.length
+  const thAnt = document.createElement('th'); thAnt.colSpan = antigenKeys.length; thAnt.textContent = 'Antigen'; tr1.appendChild(thAnt);
+
+  const thNo = document.createElement('th'); thNo.rowSpan = 2; thNo.textContent = 'No'; tr1.appendChild(thNo);
+
+  const thHasil = document.createElement('th'); thHasil.colSpan = 4; thHasil.textContent = 'Hasil Pemeriksaan'; tr1.appendChild(thHasil);
   thead.appendChild(tr1);
 
+  // header row 2 (individual antigen names + tests)
   const tr2 = document.createElement('tr');
-  const headers = ['D','C','E','c','e','K','k','Fya','Fyb','Jka','Jkb','M','N','S','s','Lea','Leb','Lua','Lub','20°C','37°C','IAT','Gel'];
-  headers.forEach(h => {
+  antigenKeys.forEach(k => {
+    const th = document.createElement('th'); th.textContent = k; tr2.appendChild(th);
+  });
+  ['20°C','37°C','IAT','Gel'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; tr2.appendChild(th);
   });
   thead.appendChild(tr2);
   table.appendChild(thead);
 
+  // body
   const tbody = document.createElement('tbody');
-  (data.cells || []).forEach((rowObj, idx) => {
+  (cells || []).forEach((rowObj, idx) => {
     const tr = document.createElement('tr');
-    const tdSel = document.createElement('td'); tdSel.textContent = rowObj.sel || (idx+1); tr.appendChild(tdSel);
-    const tdRef = document.createElement('td'); tdRef.textContent = rowObj.ref || ''; tr.appendChild(tdRef);
 
-    const ant = rowObj.antigen || {};
-    ['D','C','E','c','e','K','k','Fya','Fyb','Jka','Jkb','M','N','S','s','P1','Lea','Leb','Lua','Lub'].forEach(k=>{
-      const td = document.createElement('td'); td.className = 'antigen'; td.textContent = ant[k] || ''; tr.appendChild(td);
+    const tdSel = document.createElement('td'); tdSel.textContent = rowObj.sel || (idx+1); tr.appendChild(tdSel);
+
+    // antigen columns (read from antigenKeys and data in rowObj.antigen)
+    const antObj = rowObj.antigen || {};
+    antigenKeys.forEach(k => {
+      const td = document.createElement('td');
+      td.className = 'antigen';
+      // prefer antObj[k] else try lowercase key match
+      let v = antObj[k];
+      if((v === undefined || v === null) && antObj){
+        // try case-insensitive search
+        const foundKey = Object.keys(antObj).find(x => (x||'').toString().trim().toLowerCase() === (k||'').toString().trim().toLowerCase());
+        if(foundKey) v = antObj[foundKey];
+      }
+      td.textContent = (v === undefined || v === null) ? '' : String(v);
+      tr.appendChild(td);
     });
 
     const tdNo = document.createElement('td'); tdNo.textContent = idx+1; tr.appendChild(tdNo);
@@ -140,9 +221,11 @@ function renderTable(j){
     tbody.appendChild(tr);
   });
 
-  // auto control
+  // auto control row
   const trAuto = document.createElement('tr');
-  const tdAuto = document.createElement('td'); tdAuto.colSpan = 23; tdAuto.textContent = 'Auto Kontrol'; trAuto.appendChild(tdAuto);
+  const tdAutoLabel = document.createElement('td'); tdAutoLabel.colSpan = 1; tdAutoLabel.textContent = 'Auto Kontrol'; trAuto.appendChild(tdAutoLabel);
+  const tdFill = document.createElement('td'); tdFill.colSpan = antigenKeys.length; tdFill.textContent = ''; trAuto.appendChild(tdFill);
+  const tdNoAuto = document.createElement('td'); tdNoAuto.textContent = ''; trAuto.appendChild(tdNoAuto);
   ['20c','37c','iat','gel'].forEach(type => {
     const td = document.createElement('td'); td.appendChild(mkSelect('auto', type)); trAuto.appendChild(td);
   });
@@ -151,91 +234,73 @@ function renderTable(j){
   table.appendChild(tbody);
   wrap.appendChild(table);
 
-  // meta
-  document.getElementById('meta').textContent = `Merk: ${data.meta.merk||'-'}  Lot: ${data.meta.lot||'-'}  Exp: ${data.meta.exp||'-'}`;
+  document.getElementById('meta').textContent = `Merk: ${panelJson.data.meta.merk||'-'}  Lot: ${panelJson.data.meta.lot||'-'}  Exp: ${panelJson.data.meta.exp||'-'}`;
+  document.getElementById('status').textContent = '';
 }
 
-// fetch + render
+// Fetch + render
 async function refresh(){
   try {
     document.getElementById('status').textContent = 'Memuat...';
-    const j = await fetch('/panel.json').then(r => r.json());
+    const j = await fetchPanel();
     renderTable(j);
     document.getElementById('status').textContent = 'Data terupdate';
-  } catch(err) {
+  } catch(err){
     document.getElementById('status').textContent = 'Gagal load: ' + (err.message || err);
     document.getElementById('tableWrap').innerHTML = '';
   }
 }
 
-// simple reactive test (nilai dianggap reaktif)
+// Determine if select value is reactive
 function isReactive(v){
   if(!v) return false;
   const vv = String(v).trim().toLowerCase();
   if(vv === '?' || vv === 'negatif' || vv === 'n.t' || vv === 'nt') return false;
-  // treat these as reactive
   if(['w','m.f','mf','mf.','mf'].includes(vv)) return true;
-  if(vv.startsWith('1+') || vv.startsWith('2+') || vv.startsWith('3+') || vv.startsWith('4+')) return true;
-  if(vv === '1+' || vv === '2+' || vv === '3+' || vv === '4+') return true;
-  // accept short forms like '1+','2+','3+','4+'
   if(/[1-4]\+/.test(vv)) return true;
-  // accept plain '+' if ever used
-  if(vv === '+') return true;
+  if(vv === '+' || /^\+{1,4}$/.test(vv)) return true;
   return false;
 }
 
-// ANALYSIS (strict: antigen harus ada pada ALL reactive rows dan NOT present in ANY non-reactive)
-function analyzePanel() {
-  // ambil select values
+// Highlight antigen columns by antigen name(s)
+function highlightAntigenColumnsByNames(names){
+  const table = document.querySelector('table');
+  if(!table) return;
+  // clear previous
+  table.querySelectorAll('.highlight-antigen').forEach(el => el.classList.remove('highlight-antigen'));
+  const headerCells = Array.from(table.querySelectorAll('thead tr:nth-child(2) th'));
+  const bodyRows = Array.from(table.querySelectorAll('tbody tr'));
+  // headerCells correspond to: antigenKeys... then test headers. So first headerCell index 0 corresponds to first antigen column.
+  names.forEach(n => {
+    for(let i=0;i<headerCells.length;i++){
+      if(headerCells[i].innerText.trim().toLowerCase() === n.trim().toLowerCase()){
+        headerCells[i].classList.add('highlight-antigen');
+        const colIndex = 1 + i; // table columns: 0=Sel, 1..(1+antigenKeys.length-1) = antigen columns
+        bodyRows.forEach(row => {
+          const cell = row.children[colIndex];
+          if(cell) cell.classList.add('highlight-antigen');
+        });
+      }
+    }
+  });
+}
+
+// ANALYSIS (strict matching)
+function analyzePanel(){
+  // collect select values
   const selects = Array.from(document.querySelectorAll('select[data-cell]'));
   const byCell = {};
-  selects.forEach(s => {
+  selects.forEach(s=>{
     const id = s.dataset.cell;
     byCell[id] = byCell[id] || {};
     byCell[id][s.dataset.type] = s.value;
   });
-  
-function highlightAntigenColumns(candidates) {
-  // Ambil header tabel
-  const table = document.querySelector("table"); // sesuaikan jika pakai id/class spesifik
-  if (!table) return;
 
-  const headerCells = table.querySelectorAll("thead tr th"); 
-  const bodyRows = table.querySelectorAll("tbody tr");
-
-  candidates.forEach(candidate => {
-    // Nama antigen disesuaikan dengan penamaan header
-    const antigenName = candidate.replace("anti-", "").toUpperCase(); 
-    headerCells.forEach((th, colIndex) => {
-      const headerText = th.innerText.trim().toUpperCase();
-      if (headerText === antigenName) {
-        // Tambah class ke header
-        th.classList.add("highlight-antigen");
-        // Tambah class ke semua sel di kolom ini
-        bodyRows.forEach(row => {
-          const cell = row.children[colIndex];
-          if (cell) cell.classList.add("highlight-antigen");
-        });
-      }
-    });
-  });
-}
-
-  // check autokontrol
-   // ambil auto-control values
-  const autoVals = selects.filter(s => s.dataset.cell === 'auto').map(s => s.value);
-  // status auto kontrol: positif jika ada nilai reaktif di salah satu test
+  // auto control
+  const autoVals = selects.filter(s=>s.dataset.cell === 'auto').map(s=>s.value);
   const autoPositive = autoVals.some(isReactive);
   const autoStatus = autoPositive ? 'Positif' : 'Negatif';
-
-  // keterangan kemungkinan penyebab jika auto positif (sesuai permintaan)
-  const autoCauses = [];
-  if (autoPositive) {
-    autoCauses.push('autoantibodi');
-    autoCauses.push('alloantibodi terhadap antigen dengan fenotipe sama');
-    autoCauses.push('cold agglutinin');
-    autoCauses.push('reaksi nonspesifik (mis. hiperprotein, obat, dll)');
-  }
+  const autoCauses = autoPositive ? ['autoantibodi','alloantibodi terhadap antigen dengan fenotipe sama','cold agglutinin','reaksi nonspesifik (mis. hiperprotein, obat, dll)'] : [];
 
   if(!lastPanelData) return alert('Tidak ada data panel (refresh dulu).');
   const cells = lastPanelData.cells || [];
@@ -243,144 +308,140 @@ function highlightAntigenColumns(candidates) {
   // build rows with results
   const rows = cells.map((c, idx) => {
     const id = String(idx+1);
-    const r = {
-      sel: c.sel || (idx+1),
-      ref: c.ref || '',
-      antigen: c.antigen || {},
-      results: byCell[id] || { '20c':'?','37c':'?','iat':'?','gel':'?' }
-    };
+    const r = { sel: c.sel || (idx+1), ref: c.ref || '', antigen: c.antigen || {}, results: byCell[id] || {'20c':'?','37c':'?','iat':'?','gel':'?'} };
     r.reactive = isReactive(r.results['20c']) || isReactive(r.results['37c']) || isReactive(r.results['iat']) || isReactive(r.results['gel']);
     r.reactiveTests = [];
-    if (isReactive(r.results['20c'])) r.reactiveTests.push('20°C');
-    if (isReactive(r.results['37c'])) r.reactiveTests.push('37°C');
-    if (isReactive(r.results['iat'])) r.reactiveTests.push('IAT');
-    if (isReactive(r.results['gel'])) r.reactiveTests.push('Gel');
+    if(isReactive(r.results['20c'])) r.reactiveTests.push('20°C');
+    if(isReactive(r.results['37c'])) r.reactiveTests.push('37°C');
+    if(isReactive(r.results['iat'])) r.reactiveTests.push('IAT');
+    if(isReactive(r.results['gel'])) r.reactiveTests.push('Gel');
     return r;
   });
 
-  const reactiveRows = rows.filter(r => r.reactive);
-  const nonReactiveRows = rows.filter(r => !r.reactive);
+  const reactiveRows = rows.filter(r=>r.reactive);
+  const nonReactiveRows = rows.filter(r=>!r.reactive);
 
-  // build overall reactivity summary (which tests showed reactivity among any reactive rows)
-  const overallReactiveTests = new Set();
-  reactiveRows.forEach(r => r.reactiveTests.forEach(t => overallReactiveTests.add(t)));
-  const overallTestsList = Array.from(overallReactiveTests);
+  // antigenKeys: from table rendering (global variable antigenKeys)
+  // fallback if empty: union from data
+  let keys = antigenKeys && antigenKeys.length ? antigenKeys.slice() : [];
+  if(keys.length === 0){
+    const set = new Set();
+    cells.forEach(c => {
+      Object.keys(c.antigen || {}).forEach(k => { if(k) set.add(normalizeKey(k)); });
+    });
+    keys = Array.from(set);
+  }
 
-  // antigen keys to consider (same order as header)
-  const antigenKeys = ['D','C','E','c','e','K','k','Fya','Fyb','Jka','Jkb','M','N','S','s','P1','Lea','Leb','Lua','Lub'];
-
-  // Strict rule: antigen must be PRESENT in ALL reactiveRows AND ABSENT in ALL nonReactiveRows
+  // strict candidate: present in ALL reactiveRows AND absent in ALL nonReactiveRows
   const strictCandidates = [];
-  antigenKeys.forEach(key => {
-    if (reactiveRows.length === 0) return;
-    // check presence in all reactive rows
-    const presentAllReactive = reactiveRows.every(r => antigenPresent(r.antigen[key]));
-    // check absent in all non-reactive rows
-    const absentAllNonReactive = nonReactiveRows.every(r => !antigenPresent(r.antigen[key]));
-    if (presentAllReactive && absentAllNonReactive) {
-      strictCandidates.push({ antigen: key, reason: 'Matches strict pattern' });
-    }
+  keys.forEach(key => {
+    if(reactiveRows.length === 0) return;
+    const presentAll = reactiveRows.every(r => antigenPresent(r.antigen[key]));
+    const absentAllNon = nonReactiveRows.every(r => !antigenPresent(r.antigen[key]));
+    if(presentAll && absentAllNon) strictCandidates.push(key);
   });
 
-  // Format interpretasi per sel (text)
-  const interpretPerRow = rows.map(r => {
-    const tests = r.reactiveTests.length ? r.reactiveTests.join(', ') : '-';
-    return `Sel ${r.sel} (Ref ${r.ref}): ${r.reactive ? 'REAKTIF' : 'NEGATIF'} — reaksi pada: ${tests}`;
-  }).join('\n');
+  // interpret per row
+  const interpretPerRow = rows.map(r => `Sel ${r.sel} (Ref ${r.ref||'-'}): ${r.reactive ? 'REAKTIF' : 'NEGATIF'} — reaksi pada: ${r.reactiveTests.join(', ') || '-'}`).join('\n');
 
-  // Build conclusion text
+  // conclusion
   let conclusion = '';
-  if (reactiveRows.length === 0) {
+  if(reactiveRows.length === 0){
     conclusion = 'Tidak ditemukan sel reaktif pada suhu 20°/37°C/IAT/Gel.';
+  } else if(strictCandidates.length === 0){
+    conclusion = 'Tidak ditemukan kandidat antibodi spesifik dengan aturan strict. Pertimbangkan pemeriksaan lanjutan.';
   } else {
-    if (strictCandidates.length === 0) {
-      conclusion = 'Tidak ditemukan kandidat antibodi spesifik dengan aturan strict (antigen harus ada pada semua sel reaktif dan tidak ada pada sel non-reaktif). Pertimbangkan pemeriksaan lanjutan.';
-    } else {
-      const names = strictCandidates.map(c => `anti-${c.antigen}`).join(', ');
-      conclusion = `Ditemukan kemungkinan adanya antibodi di dalam serum pasien yang reaktif pada ${overallTestsList.join(', ') || '-'}.\nSpesifikasi antibodi: ${names}.`;
-    }
+    conclusion = `Ditemukan kemungkinan antibodi: ${strictCandidates.map(s=>'anti-'+s).join(', ')}.`;
   }
 
-  // recommendations
   const recommendations = [];
-  if (strictCandidates.length > 0) {
-    recommendations.push('Lakukan identifikasi antibodi (panel ID) terhadap kandidat teratas untuk konfirmasi.');
-  } else {
-    recommendations.push('Pertimbangkan pemeriksaan panel identifikasi lanjutan atau ulangi uji dengan panel lain.');
-  }
+  if(strictCandidates.length>0) recommendations.push('Lakukan identifikasi antibodi (panel ID) terhadap kandidat teratas untuk konfirmasi.');
+  else recommendations.push('Pertimbangkan pemeriksaan panel identifikasi lanjutan atau ulangi uji dengan panel lain.');
   recommendations.push('Periksa riwayat transfusi/kehamilan dan pastikan crossmatch jika diperlukan.');
 
-    // contoh panggilan showAnalysis (sesuaikan dengan objek yang sudah ada)
+  // show and highlight
   showAnalysis({
-    invalid: false,
     interpretPerRow,
     reactiveCount: reactiveRows.length,
     totalCount: rows.length,
     candidates: strictCandidates,
     conclusion,
     recommendations,
-    auto: {
-      status: autoStatus,
-      values: autoVals,
-      causes: autoCauses
-    }
+    auto: { status: autoStatus, values: autoVals, causes: autoCauses }
   });
+
+  // highlight columns by antigen names
+  highlightAntigenColumnsByNames(strictCandidates);
 }
 
-
-// showAnalysis versi menyesuaikan format contoh (lebih singkat dan rapi)
+// Render analysis output
 function showAnalysis(out){
-  let a = document.getElementById('analysisOut');
-  if(!a){
-    a = document.createElement('div');
-    a.id = 'analysisOut';
-    a.style.marginTop = '12px';
-    a.style.padding = '12px';
-    a.style.border = '1px solid #e6edf3';
-    a.style.background = '#fff';
-    a.style.borderRadius = '8px';
-    document.querySelector('.card').appendChild(a);
-  }
-  
-  let html = '';
-  
-  html += `<div style="margin-top:8px;"><strong>Kemungkinan antibodi:</strong></div>`;
-  if (out.candidates && out.candidates.length > 0) {
-    html += `<div>`;
-    out.candidates.forEach(c => {
-      html += `<span class="antibody-badge">${c}</span>`;
+  const container = document.getElementById('analysisContainer');
+  container.innerHTML = '';
+  const el = document.createElement('div');
+  el.className = 'analysis';
+
+  // interpretation
+  const p = document.createElement('div');
+  p.innerHTML = '<strong>Interpretasi per sel</strong>';
+  const pre = document.createElement('pre');
+  pre.style.whiteSpace = 'pre-wrap';
+  pre.style.background = '#f8fafc';
+  pre.style.padding = '8px';
+  pre.style.borderRadius = '6px';
+  pre.textContent = out.interpretPerRow;
+  p.appendChild(pre);
+  el.appendChild(p);
+
+  // summary
+  const sum = document.createElement('div'); sum.style.marginTop='8px';
+  sum.innerHTML = `<strong>Ringkasan</strong><div>Sel reaktif: <b>${out.reactiveCount}</b> / ${out.totalCount}</div>`;
+  el.appendChild(sum);
+
+  // candidates as badges
+  const candDiv = document.createElement('div'); candDiv.style.marginTop='8px';
+  candDiv.innerHTML = '<strong>Kemungkinan antibodi:</strong>';
+  if(out.candidates && out.candidates.length){
+    const wrap = document.createElement('div'); wrap.style.marginTop='6px';
+    out.candidates.forEach(c=>{
+      const sp = document.createElement('span'); sp.className='antibody-badge'; sp.textContent = 'anti-' + c; wrap.appendChild(sp);
     });
-    html += `</div>`;
+    candDiv.appendChild(wrap);
   } else {
-    html += `<div>Tidak ada kandidat antibodi yang terdeteksi.</div>`;
+    const none = document.createElement('div'); none.textContent = '- Tidak ada kandidat spesifik (strict matching).'; none.style.marginTop='6px'; candDiv.appendChild(none);
   }
-  // display auto control summary
-  html += `<div style="margin-top:10px;font-weight:700">Auto Kontrol</div>`;
-  if (out.auto) {
-    html += `<div style="margin-top:6px">Status: <b>${out.auto.status}</b></div>`;
-    if (out.auto.status === 'Positif') {
-      html += `<div style="margin-top:6px"><em>Kemungkinan penyebab:</em><ul>`;
-      out.auto.causes.forEach(c => html += `<li>${c}</li>`);
-      html += `</ul></div>`;
-      html += `<div style="margin-top:6px;color:#9a3b00">Catatan: Auto kontrol positif bisa menunjukkan adanya autoantibodi atau faktor nonspesifik; pertimbangkan pemeriksaan lanjutan (auto-adsorpsi, pemanasan serum, dsb).</div>`;
-    } else {
-      html += `<div style="margin-top:6px">Tidak ditemukan reaksi pada auto kontrol.</div>`;
-    }
+  el.appendChild(candDiv);
+
+  // auto control
+  const autoDiv = document.createElement('div'); autoDiv.style.marginTop='10px';
+  autoDiv.innerHTML = '<strong>Auto Kontrol</strong>';
+  autoDiv.innerHTML += `<div style="margin-top:6px">Status: <b>${out.auto.status}</b></div>`;
+  if(out.auto.status === 'Positif'){
+    let ul = '<div style="margin-top:6px"><em>Kemungkinan penyebab:</em><ul>';
+    out.auto.causes.forEach(c=> ul += `<li>${c}</li>`);
+    ul += '</ul></div>';
+    autoDiv.innerHTML += ul;
+    autoDiv.innerHTML += `<div style="margin-top:6px;color:#9a3b00">Catatan: Auto kontrol positif bisa menunjukkan adanya autoantibodi atau faktor nonspesifik; pertimbangkan pemeriksaan lanjutan (auto-adsorpsi, pemanasan serum, dsb).</div>`;
+  } else {
+    autoDiv.innerHTML += `<div style="margin-top:6px">Tidak ditemukan reaksi pada auto kontrol.</div>`;
   }
+  el.appendChild(autoDiv);
 
-  html += `<div style="margin-top:10px;font-weight:700">Kesimpulan / rekomendasi</div>`;
-  html += `<div style="margin-top:6px">${out.conclusion.replace(/\n/g,'<br>')}</div>`;
-  html += `<div style="margin-top:8px"><em>Rekomendasi:</em><ul>`;
-  out.recommendations.forEach(r => html += `<li>${r}</li>`);
-  html += `</ul></div>`;
+  // conclusion & recommendation
+  const concl = document.createElement('div'); concl.style.marginTop='10px';
+  concl.innerHTML = `<strong>Kesimpulan / rekomendasi</strong><div style="margin-top:6px">${out.conclusion.replace(/\n/g,'<br>')}</div>`;
+  let rec = '<div style="margin-top:8px"><em>Rekomendasi:</em><ul>';
+  out.recommendations.forEach(r=> rec += `<li>${r}</li>`);
+  rec += '</ul></div>';
+  concl.innerHTML += rec;
+  el.appendChild(concl);
 
-  a.innerHTML = html;
-
+  container.appendChild(el);
 }
 
+// Local save / load / export
 document.getElementById('refreshBtn').addEventListener('click', refresh);
 document.getElementById('analyzeBtn').addEventListener('click', analyzePanel);
-
 document.getElementById('saveBtn').addEventListener('click', ()=>{
   const selects = document.querySelectorAll('select[data-cell]');
   const out = {};
@@ -405,7 +466,6 @@ document.getElementById('loadBtn').addEventListener('click', ()=>{
   });
   alert('Data dimuat dari localStorage');
 });
-
 document.getElementById('exportBtn').addEventListener('click', ()=>{
   const selects = document.querySelectorAll('select[data-cell]');
   const out = {};
@@ -418,19 +478,8 @@ document.getElementById('exportBtn').addEventListener('click', ()=>{
   const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'panel_results.json'; a.click(); URL.revokeObjectURL(a.href);
 });
 
+// Auto-refresh on load
 window.addEventListener('load', refresh);
-
 </script>
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
-
