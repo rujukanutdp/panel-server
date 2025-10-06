@@ -116,7 +116,7 @@ function readExcelToPanel() {
       ['fya'], ['fyb'],
       ['jka'], ['jkb'],
       ['m'], ['n'], ['s'], ['s'],
-      ['p1'], ['lea'], ['leb'], ['lua'], ['lub'], ['Dia'], ;
+      ['p1'], ['lea'], ['leb'], ['lua'], ['lub'], ;
     // Better to fetch by explicit common names:
     ant.D = cell(row, ['d','D']);
     ant.C = cell(row, ['c','C']);
@@ -139,8 +139,7 @@ function readExcelToPanel() {
     ant.Leb = cell(row, ['leb']);
     ant.Lua = cell(row, ['lua']);
     ant.Lub = cell(row, ['lub']);
-    ant.Dia = cell(row, ['Dia']);
-
+    
     // fallback positional extraction if many empty
     // assume typical Excel layout (Ref at col 1, then D.. etc)
     // try minimal safe positional fallbacks (only when key is empty)
@@ -165,8 +164,7 @@ function readExcelToPanel() {
     if (!ant.Leb) ant.Leb = fallback(19);
     if (!ant.Lua) ant.Lua = fallback(20);
     if (!ant.Lub) ant.Lub = fallback(21);
-    if (!ant.Dia) ant.Dia = fallback(22);
-
+    
     result.cells.push({
       sel,
       ref,
@@ -224,6 +222,7 @@ app.get("/", (req, res) => {
 app.listen(port, () => {
   console.log(`Server berjalan di http://localhost:${port}`);
 });
+
 
 
 
