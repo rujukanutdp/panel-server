@@ -3,13 +3,23 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Panel Skrining — Client (Dinamis)</title>
+<title>Panel Skrining — Client (Dinamis dari Excel)</title>
 <style>
   :root{
-    --bg:#f5f7fb; --card:#fff; --muted:#64748b; --accent:#2563eb; --danger:#d9534f; --border:#e2e8f0;
+    --bg:#f5f7fb;
+    --card:#ffffff;
+    --muted:#64748b;
+    --accent:#2563eb;
+    --border:#e2e8f0;
+    --danger:#d9534f;
   }
   html,body{height:100%}
-  body{font-family:Inter,Arial,Helvetica,sans-serif;margin:12px;background:var(--bg);color:#0b1220}
+  body{
+    font-family:Inter,Arial,Helvetica,sans-serif;
+    margin:12px;
+    background:var(--bg);
+    color:#0b1220;
+  }
   .card{background:var(--card);padding:14px;border-radius:10px;box-shadow:0 8px 24px rgba(2,6,23,0.06)}
   .table-wrap{overflow:auto;border:1px solid var(--border);border-radius:8px;margin-top:10px}
   table{border-collapse:collapse;width:100%;min-width:900px;table-layout:fixed;font-size:13px}
@@ -20,16 +30,18 @@
   button{padding:8px 12px;border-radius:6px;background:var(--accent);color:#fff;border:0;cursor:pointer}
   .small{font-size:13px;color:var(--muted)}
   pre.json{background:#0b1220;color:#e6eef8;padding:8px;border-radius:6px}
-  .antibody-badge{display:inline-block;background-color:var(--danger);color:white;padding:4px 10px;margin:3px;border-radius:4px;font-weight:700;font-size:13px}
+  .antibody-badge { display:inline-block;background-color:var(--danger);color:white;padding:4px 10px;margin:3px;border-radius:4px;font-weight:700;font-size:13px; }
   .highlight-antigen{background-color:rgba(255,0,0,0.12) !important}
   .meta{margin-top:8px;color:var(--muted);font-size:13px}
   .analysis{margin-top:12px;padding:10px;border-radius:8px;background:#fff;border:1px solid #e6edf3}
+  .note{color:var(--muted);font-size:13px;margin-top:6px}
   @media (max-width:700px){ table{min-width:800px;font-size:12px} }
 </style>
 </head>
 <body>
   <div class="card" role="main">
     <h2>Panel Skrining — Client</h2>
+
     <div style="display:flex;gap:8px;align-items:center">
       <button id="refreshBtn">Refresh data</button>
       <div id="meta" class="meta">Memuat...</div>
@@ -37,7 +49,7 @@
 
     <div id="tableWrap" class="table-wrap" role="region" aria-label="Panel skrining"></div>
 
-    <div class="controls">
+    <div class="controls" style="margin-top:8px">
       <div style="display:flex;gap:8px;align-items:center">
         <button id="analyzeBtn">Analyze</button>
         <button id="saveBtn">Save local</button>
@@ -52,20 +64,23 @@
   </div>
 
 <script>
-/* panel_client.html - dynamic: reads /panel.json (header + data.cells)
-   First column expected = Sel, second = Ref, rest = antigen names (dynamic)
-   Tests columns (20°C,37°C,IAT,Gel) are UI select controls on right
+/*
+  Dynamic client:
+  - Assumes /panel.json returns { ok:true, header: [...], data: { meta:{}, cells:[{sel,ref,antigen:{...}}], auto:{'20c':..}}}
+  - First column in header = Sel, second = Ref, remaining header columns => antigen names (dynamic)
 */
 
 let lastPanelData = null;
-let antigenKeys = [];
+let antigenKeys = []; // ordered antigen names (from Excel header slice)
 
+// fetch /panel.json
 async function fetchPanel(){
   const resp = await fetch('/panel.json');
   if(!resp.ok) throw new Error('Gagal fetch /panel.json');
   return resp.json();
 }
 
+// create select input
 function mkSelect(cell, type, defaultValue){
   const opts = ['?','Negatif','m.f','w','1+','2+','3+','4+','n.t'];
   const s = document.createElement('select');
@@ -75,16 +90,28 @@ function mkSelect(cell, type, defaultValue){
     const op = document.createElement('option'); op.value = o; op.textContent = o;
     s.appendChild(op);
   });
-  if(defaultValue){
+  if(defaultValue) {
+    // prefer exact match, else keep ?
     const norm = String(defaultValue).trim();
     const avail = Array.from(s.options).map(o => o.value);
     s.value = avail.includes(norm) ? norm : '?';
-  } else s.value = '?';
+  } else {
+    s.value = '?';
+  }
   return s;
 }
 
-function norm(v){ return (v === undefined || v === null) ? '' : String(v).trim(); }
+// interpret antigen present in Excel cell
+function antigenPresent(val){
+  if(val === undefined || val === null) return false;
+  const v = String(val).trim();
+  if(v === '' || v === '0' || v.toLowerCase() === 'negatif' || v === '-') return false;
+  return true;
+}
 
+function normalizeKey(k){ return String(k||'').trim(); }
+
+// render table from panelJson
 function renderTable(panelJson){
   const wrap = document.getElementById('tableWrap');
   if(!panelJson || !panelJson.ok){
@@ -95,51 +122,56 @@ function renderTable(panelJson){
   }
 
   lastPanelData = panelJson.data || {};
-  const header = Array.isArray(panelJson.header) ? panelJson.header.map(h => norm(h)) : [];
-  const cells = panelJson.data.cells || [];
+  const header = Array.isArray(panelJson.header) ? panelJson.header.map(h => normalizeKey(h)) : [];
+  const cells = (panelJson.data && panelJson.data.cells) ? panelJson.data.cells : [];
 
-  // detect antigen keys: prefer header slice starting at index 2
+  // Determine antigenKeys:
+  // assume header[0] = Sel, header[1] = Ref, antigens = header[2...n] until tests columns (if any)
   antigenKeys = [];
   if(header.length >= 3){
-    // collect header[2..] until we hit a test-like header (rare)
-    const testsLike = ['20','20°','37','37°','iat','gel','hasil'];
-    for(let i = 2; i < header.length; i++){
+    // take from index 2 until a value that looks like '20'/'37'/'IAT'/'Gel' (case-insensitive)
+    const testsLike = ['20','20°','20°c','37','37°','37°c','iat','gel','hasil'];
+    for(let i=2;i<header.length;i++){
       const low = header[i].toLowerCase();
       if(testsLike.some(t => low.includes(t))) break;
-      if(header[i] && header[i].trim() !== '') antigenKeys.push(header[i]);
+      antigenKeys.push(header[i]);
     }
   }
-  // fallback: build from union of antigen keys in data
+
+  // fallback: build antigenKeys from union of antigen keys in data
   if(antigenKeys.length === 0){
     const set = new Set();
-    cells.forEach(c => {
-      Object.keys(c.antigen || {}).forEach(k => {
-        if(k && k.trim()) set.add(k);
+    (cells||[]).forEach(c=>{
+      const ant = c.antigen || {};
+      Object.keys(ant).forEach(k => {
+        const kn = normalizeKey(k);
+        if(kn) set.add(kn);
       });
     });
     antigenKeys = Array.from(set);
   }
 
+  // still empty => nothing to show
   if(antigenKeys.length === 0){
     wrap.innerHTML = '<div style="padding:12px;">Tidak ditemukan kolom antigen dalam file Excel.</div>';
     document.getElementById('meta').textContent = `Merk: ${panelJson.data.meta?.merk || '-'}  Lot: ${panelJson.data.meta?.lot || '-'}  Exp: ${panelJson.data.meta?.exp || '-'}`;
     return;
   }
 
-  // build table DOM
+  // Build table DOM
   wrap.innerHTML = '';
   const table = document.createElement('table');
 
-  // header row 1
+  // thead row 1
   const thead = document.createElement('thead');
   const tr1 = document.createElement('tr');
-  const thSel = document.createElement('th'); thSel.rowSpan=2; thSel.textContent='Sel'; tr1.appendChild(thSel);
+  const thSel = document.createElement('th'); thSel.rowSpan = 2; thSel.textContent = 'Sel'; tr1.appendChild(thSel);
   const thAntGroup = document.createElement('th'); thAntGroup.colSpan = antigenKeys.length; thAntGroup.textContent = 'Antigen'; tr1.appendChild(thAntGroup);
-  const thNo = document.createElement('th'); thNo.rowSpan=2; thNo.textContent='No'; tr1.appendChild(thNo);
-  const thHasil = document.createElement('th'); thHasil.colSpan=4; thHasil.textContent='Hasil Pemeriksaan'; tr1.appendChild(thHasil);
+  const thNo = document.createElement('th'); thNo.rowSpan = 2; thNo.textContent = 'No'; tr1.appendChild(thNo);
+  const thHasil = document.createElement('th'); thHasil.colSpan = 4; thHasil.textContent = 'Hasil Pemeriksaan'; tr1.appendChild(thHasil);
   thead.appendChild(tr1);
 
-  // header row 2
+  // thead row 2: antigen names + tests
   const tr2 = document.createElement('tr');
   antigenKeys.forEach(k => {
     const th = document.createElement('th'); th.textContent = k; tr2.appendChild(th);
@@ -150,23 +182,25 @@ function renderTable(panelJson){
   thead.appendChild(tr2);
   table.appendChild(thead);
 
-  // body rows
+  // tbody rows
   const tbody = document.createElement('tbody');
-  // load saved selects if any
+
+  // try to fill selects with saved local values if any
   const localSaved = JSON.parse(localStorage.getItem('panel_local') || '{}');
 
-  cells.forEach((rowObj, idx) => {
+  (cells||[]).forEach((rowObj, idx) => {
     const tr = document.createElement('tr');
     const tdSel = document.createElement('td'); tdSel.textContent = rowObj.sel || (idx+1); tr.appendChild(tdSel);
 
     const antObj = rowObj.antigen || {};
     antigenKeys.forEach(k => {
-      const td = document.createElement('td'); td.className = 'antigen';
-      // case-insensitive fetch
+      const td = document.createElement('td');
+      td.className = 'antigen';
+      // find value case-insensitively
       let v = (antObj[k] !== undefined && antObj[k] !== null) ? antObj[k] : '';
       if((v === '' || v === undefined) && antObj){
-        const fk = Object.keys(antObj).find(x => String(x||'').trim().toLowerCase() === String(k||'').trim().toLowerCase());
-        if(fk) v = antObj[fk];
+        const foundKey = Object.keys(antObj).find(x => (x||'').toString().trim().toLowerCase() === (k||'').toString().trim().toLowerCase());
+        if(foundKey) v = antObj[foundKey];
       }
       td.textContent = (v === undefined || v === null) ? '' : String(v);
       tr.appendChild(td);
@@ -174,6 +208,7 @@ function renderTable(panelJson){
 
     const tdNo = document.createElement('td'); tdNo.textContent = idx+1; tr.appendChild(tdNo);
 
+    // selects for tests; prefill from localSaved if exists
     const pref = localSaved[String(idx+1)] || {};
     tr.appendChild((()=>{ const td=document.createElement('td'); td.appendChild(mkSelect(idx+1,'20c', pref['20c'] || '')); return td })());
     tr.appendChild((()=>{ const td=document.createElement('td'); td.appendChild(mkSelect(idx+1,'37c', pref['37c'] || '')); return td })());
@@ -188,21 +223,24 @@ function renderTable(panelJson){
   const tdAutoLabel = document.createElement('td'); tdAutoLabel.textContent = 'Auto Kontrol'; trAuto.appendChild(tdAutoLabel);
   const tdSpan = document.createElement('td'); tdSpan.colSpan = antigenKeys.length; tdSpan.textContent = ''; trAuto.appendChild(tdSpan);
   const tdNoAuto = document.createElement('td'); tdNoAuto.textContent = ''; trAuto.appendChild(tdNoAuto);
+
+  // if server provided auto values, prefill
   const serverAuto = (panelJson.data && panelJson.data.auto) ? panelJson.data.auto : null;
   trAuto.appendChild((()=>{ const td=document.createElement('td'); td.appendChild(mkSelect('auto','20c', serverAuto ? (serverAuto['20c']||'') : '')); return td })());
   trAuto.appendChild((()=>{ const td=document.createElement('td'); td.appendChild(mkSelect('auto','37c', serverAuto ? (serverAuto['37c']||'') : '')); return td })());
   trAuto.appendChild((()=>{ const td=document.createElement('td'); td.appendChild(mkSelect('auto','iat', serverAuto ? (serverAuto['iat']||'') : '')); return td })());
   trAuto.appendChild((()=>{ const td=document.createElement('td'); td.appendChild(mkSelect('auto','gel', serverAuto ? (serverAuto['gel']||'') : '')); return td })());
-  tbody.appendChild(trAuto);
 
+  tbody.appendChild(trAuto);
   table.appendChild(tbody);
   wrap.appendChild(table);
 
+  // meta text
   document.getElementById('meta').textContent = `Merk: ${panelJson.data.meta?.merk || '-'}  Lot: ${panelJson.data.meta?.lot || '-'}  Exp: ${panelJson.data.meta?.exp || '-'}`;
   document.getElementById('status').textContent = '';
 }
 
-// helpers
+// convenience: determine reactive value
 function isReactive(v){
   if(!v) return false;
   const vv = String(v).trim().toLowerCase();
@@ -213,16 +251,22 @@ function isReactive(v){
   return false;
 }
 
+// highlight antigen columns by name (case-insensitive)
 function highlightAntigenColumnsByNames(names){
   const table = document.querySelector('table');
   if(!table) return;
+  // remove existing highlights
   table.querySelectorAll('.highlight-antigen').forEach(el => el.classList.remove('highlight-antigen'));
+
+  // header row 2 contains antigen names in first N th
   const headerCells = Array.from(table.querySelectorAll('thead tr:nth-child(2) th'));
+  // headerCells[0] -> first antigen, headerCells length = antigenKeys.length + 4 (tests)
   names.forEach(n => {
     for(let i=0;i<headerCells.length;i++){
       if(headerCells[i].innerText.trim().toLowerCase() === n.trim().toLowerCase()){
         headerCells[i].classList.add('highlight-antigen');
-        const colIndex = 1 + i; // 0=Sel, 1.. = antigen columns
+        // column index in table DOM = 1 (Sel) + i
+        const colIndex = 1 + i;
         const bodyRows = Array.from(table.querySelectorAll('tbody tr'));
         bodyRows.forEach(row => {
           const cell = row.children[colIndex];
@@ -233,7 +277,9 @@ function highlightAntigenColumnsByNames(names){
   });
 }
 
+// analyze (strict matching)
 function analyzePanel(){
+  // gather select values
   const selects = Array.from(document.querySelectorAll('select[data-cell]'));
   const byCell = {};
   selects.forEach(s => {
@@ -242,6 +288,7 @@ function analyzePanel(){
     byCell[id][s.dataset.type] = s.value;
   });
 
+  // auto control
   const autoVals = selects.filter(s => s.dataset.cell === 'auto').map(s => s.value);
   const autoPositive = autoVals.some(isReactive);
   const autoStatus = autoPositive ? 'Positif' : 'Negatif';
@@ -265,24 +312,27 @@ function analyzePanel(){
   const reactiveRows = rows.filter(r => r.reactive);
   const nonReactiveRows = rows.filter(r => !r.reactive);
 
-  // keys to consider
+  // determine keys to test: use antigenKeys from render; fallback to union of antigen object keys
   let keys = antigenKeys && antigenKeys.length ? antigenKeys.slice() : [];
   if(keys.length === 0){
     const set = new Set();
-    cells.forEach(c => Object.keys(c.antigen || {}).forEach(k => set.add(k)));
+    cells.forEach(c => Object.keys(c.antigen || {}).forEach(k => set.add(normalizeKey(k))));
     keys = Array.from(set);
   }
 
+  // strict matching
   const strictCandidates = [];
   keys.forEach(key => {
     if(reactiveRows.length === 0) return;
+    // check present in all reactive rows (use case-insensitive antigen lookup)
     const presentAll = reactiveRows.every(r => {
-      const ak = Object.keys(r.antigen || {}).find(x => String(x||'').trim().toLowerCase() === String(key||'').trim().toLowerCase());
-      return ak ? (function(v){ if(v === undefined || v === null) return false; const s = String(v).trim().toLowerCase(); if(s===''||s==='0'||s==='-'||s==='negatif') return false; return true;})(r.antigen[ak]) : false;
+      // find matching antigen field in r.antigen
+      const ak = Object.keys(r.antigen || {}).find(x => normalizeKey(x).toLowerCase() === normalizeKey(key).toLowerCase());
+      return ak ? antigenPresent(r.antigen[ak]) : false;
     });
     const absentAllNon = nonReactiveRows.every(r => {
-      const ak = Object.keys(r.antigen || {}).find(x => String(x||'').trim().toLowerCase() === String(key||'').trim().toLowerCase());
-      return ak ? (function(v){ if(v === undefined || v === null) return true; const s = String(v).trim().toLowerCase(); if(s===''||s==='0'||s==='-'||s==='negatif') return true; return false; })(r.antigen[ak]) : true;
+      const ak = Object.keys(r.antigen || {}).find(x => normalizeKey(x).toLowerCase() === normalizeKey(key).toLowerCase());
+      return ak ? !antigenPresent(r.antigen[ak]) : true; // if key not present at all in this row, consider absent
     });
     if(presentAll && absentAllNon) strictCandidates.push(key);
   });
@@ -299,6 +349,7 @@ function analyzePanel(){
   else recommendations.push('Pertimbangkan pemeriksaan panel identifikasi lanjutan atau ulangi uji dengan panel lain.');
   recommendations.push('Periksa riwayat transfusi/kehamilan dan pastikan crossmatch jika diperlukan.');
 
+  // display & highlight
   showAnalysis({
     interpretPerRow,
     reactiveCount: reactiveRows.length,
@@ -309,16 +360,18 @@ function analyzePanel(){
     auto: { status: autoStatus, values: autoVals, causes: autoCauses }
   });
 
+  // highlight columns
   highlightAntigenColumnsByNames(strictCandidates);
 }
 
+// render analysis output
 function showAnalysis(out){
   const container = document.getElementById('analysisContainer');
   container.innerHTML = '';
   const el = document.createElement('div');
   el.className = 'analysis';
 
-  // per sel
+  // interpretation per sel
   const p = document.createElement('div');
   p.innerHTML = '<strong>Interpretasi per sel</strong>';
   const pre = document.createElement('pre');
@@ -376,9 +429,34 @@ function showAnalysis(out){
   container.appendChild(el);
 }
 
+// highlight helper (reads table DOM)
+function highlightAntigenColumnsByNames(names){
+  const table = document.querySelector('table');
+  if(!table) return;
+  // clear previous
+  table.querySelectorAll('.highlight-antigen').forEach(el => el.classList.remove('highlight-antigen'));
+
+  const headerCells = Array.from(table.querySelectorAll('thead tr:nth-child(2) th'));
+  // headerCells[0..antigenKeys.length-1] = antigen columns
+  names.forEach(n => {
+    for(let i=0;i<headerCells.length;i++){
+      if(headerCells[i].innerText.trim().toLowerCase() === n.trim().toLowerCase()){
+        headerCells[i].classList.add('highlight-antigen');
+        const colIndex = 1 + i; // 0=Sel, 1.. => antigen
+        const bodyRows = Array.from(table.querySelectorAll('tbody tr'));
+        bodyRows.forEach(row => {
+          const cell = row.children[colIndex];
+          if(cell) cell.classList.add('highlight-antigen');
+        });
+      }
+    }
+  });
+}
+
 // local save/load/export
 document.getElementById('refreshBtn').addEventListener('click', refresh);
 document.getElementById('analyzeBtn').addEventListener('click', analyzePanel);
+
 document.getElementById('saveBtn').addEventListener('click', ()=>{
   const selects = document.querySelectorAll('select[data-cell]');
   const out = {};
@@ -390,6 +468,7 @@ document.getElementById('saveBtn').addEventListener('click', ()=>{
   localStorage.setItem('panel_local', JSON.stringify(out));
   alert('Tersimpan ke localStorage');
 });
+
 document.getElementById('loadBtn').addEventListener('click', ()=>{
   const raw = localStorage.getItem('panel_local');
   if(!raw) return alert('Tidak ada data tersimpan');
@@ -403,6 +482,7 @@ document.getElementById('loadBtn').addEventListener('click', ()=>{
   });
   alert('Data dimuat dari localStorage');
 });
+
 document.getElementById('exportBtn').addEventListener('click', ()=>{
   const selects = document.querySelectorAll('select[data-cell]');
   const out = {};
@@ -415,6 +495,7 @@ document.getElementById('exportBtn').addEventListener('click', ()=>{
   const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'panel_results.json'; a.click(); URL.revokeObjectURL(a.href);
 });
 
+// initial load
 async function refresh(){
   try {
     document.getElementById('status').textContent = 'Memuat...';
