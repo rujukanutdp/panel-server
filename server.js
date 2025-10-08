@@ -1,4 +1,3 @@
-// server.js
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -6,9 +5,8 @@ const xlsx = require("xlsx");
 const app = express();
 
 app.use(cors());
-app.use(express.static(__dirname)); // supaya panel_client.html bisa diakses langsung
+app.use(express.static(__dirname));
 
-// === Fungsi baca Excel ===
 function readAntigram() {
   try {
     const filePath = path.join(__dirname, "antigram.xlsx");
@@ -16,24 +14,27 @@ function readAntigram() {
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const json = xlsx.utils.sheet_to_json(sheet, { defval: "" });
 
-    // Baris pertama = metadata (merk, lot, exp)
-    const meta = json[0] || {};
-    // Sisanya = data sel
-    const rows = json.slice(1);
+    if (json.length === 0) return { meta: {}, rows: [] };
 
+    // baris pertama = metadata
+    const meta = {
+      merk: json[0].Merk || json[0].merk || "-",
+      lot: json[0].Lot || json[0].lot || "-",
+      exp: json[0].Exp || json[0].exp || "-"
+    };
+
+    // sisanya = data tabel sel
+    const rows = json.slice(1);
     return { meta, rows };
   } catch (err) {
-    console.error("Gagal baca antigram.xlsx:", err.message);
+    console.error("Gagal membaca antigram.xlsx:", err);
     return { meta: {}, rows: [] };
   }
 }
 
-// === Endpoint kirim data ke client ===
 app.get("/data", (req, res) => {
-  const data = readAntigram();
-  res.json(data);
+  res.json(readAntigram());
 });
 
-// === Jalankan server ===
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server jalan di port ${PORT}`));
+app.listen(PORT, () => console.log(`✅ Server jalan di port ${PORT}`));
