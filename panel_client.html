@@ -1,94 +1,81 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Panel Skrining — Client (Sinkron Excel)</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
 <style>
-  body { padding: 20px; background: #f8fafc; }
-  h3 { font-weight: 700; }
-  table { text-align: center; vertical-align: middle; }
-  th, td { padding: 4px 8px; }
-  .highlight { background-color: #ffeaea; }
-  .meta-info { margin: 12px 0 20px 0; font-size: 16px; font-weight: 500; }
+body{font-family:Arial,Helvetica,sans-serif;background:#f8fafc;color:#111;margin:20px}
+.card{background:#fff;padding:16px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,0.08)}
+button{padding:8px 14px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer}
+button:hover{opacity:0.9}
+table{border-collapse:collapse;width:100%;margin-top:10px;font-size:13px;min-width:900px}
+th,td{border:1px solid #e5e7eb;padding:6px;text-align:center}
+thead th{background:#f1f5f9;position:sticky;top:0}
+.highlight-antigen{background:rgba(255,0,0,0.15)!important}
+.analysis{margin-top:16px;padding:10px;background:#fff;border-radius:6px;border:1px solid #ddd}
+.antibody-badge{background:#dc2626;color:#fff;padding:4px 8px;border-radius:4px;margin:2px;display:inline-block}
 </style>
 </head>
 <body>
-  <h3>Panel Skrining — Client (Sinkron Excel)</h3>
-  <div class="my-2">
-    <button id="refreshBtn" class="btn btn-primary">Refresh data</button>
-    <span id="statusText" class="ms-3 text-secondary">Memuat...</span>
+<div class="card">
+  <h2>Panel Skrining — Client (Sinkron Excel)</h2>
+  <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+    <button id="refreshBtn">Refresh data</button>
+    <span id="meta"></span>
+  </div>
+  <div id="tableWrap"></div>
+
+  <div style="margin-top:8px;display:flex;gap:8px;">
+    <button id="analyzeBtn">Analyze</button>
+    <button id="saveBtn">Save local</button>
+    <button id="loadBtn">Load local</button>
+    <button id="exportBtn">Export JSON</button>
   </div>
 
-  <div id="meta" class="meta-info"></div>
-
-  <div class="table-responsive">
-    <table id="panelTable" class="table table-bordered table-sm bg-white"></table>
-  </div>
-
-  <div class="mt-3">
-    <button class="btn btn-primary">Analyze</button>
-    <button class="btn btn-secondary">Save local</button>
-    <button class="btn btn-secondary">Load local</button>
-    <button class="btn btn-info text-white">Export JSON</button>
-  </div>
+  <div id="analysisContainer"></div>
+</div>
 
 <script>
-async function loadData() {
-  const status = document.getElementById("statusText");
-  const metaDiv = document.getElementById("meta");
-  const table = document.getElementById("panelTable");
+let lastPanelData = null;
+let antigenKeys = [];
 
-  status.textContent = "Memuat...";
-  try {
-    const res = await fetch("/data");
-    const { meta, rows } = await res.json();
+async function fetchPanel(){ const r=await fetch("/panel.json"); return r.json(); }
+function mkSelect(cell,type){ const opts=['?','Negatif','w','1+','2+','3+','4+']; const s=document.createElement('select'); s.dataset.cell=cell; s.dataset.type=type; opts.forEach(o=>{let op=document.createElement('option');op.value=o;op.textContent=o;s.appendChild(op);}); return s; }
 
-    // tampilkan meta
-    metaDiv.innerHTML = `Merk: <b>${meta.merk}</b> &nbsp;&nbsp; Lot: <b>${meta.lot}</b> &nbsp;&nbsp; Exp: <b>${meta.exp}</b>`;
-
-    // buat tabel
-    if (!rows.length) {
-      table.innerHTML = "<tr><td>Data kosong</td></tr>";
-      return;
-    }
-
-    // Header dinamis
-    const headers = Object.keys(rows[0]);
-    table.innerHTML = "";
-    const thead = document.createElement("thead");
-    const trHead = document.createElement("tr");
-    headers.forEach(h => {
-      const th = document.createElement("th");
-      th.textContent = h;
-      trHead.appendChild(th);
-    });
-    thead.appendChild(trHead);
-    table.appendChild(thead);
-
-    // Isi tabel
-    const tbody = document.createElement("tbody");
-    rows.forEach(r => {
-      const tr = document.createElement("tr");
-      headers.forEach(h => {
-        const td = document.createElement("td");
-        td.textContent = r[h] ?? "";
-        tr.appendChild(td);
-      });
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-
-    status.textContent = "Data terupdate";
-  } catch (err) {
-    console.error(err);
-    status.textContent = "Gagal memuat data!";
-  }
+function renderTable(j){
+  const wrap=document.getElementById('tableWrap');
+  if(!j.ok){wrap.textContent='Gagal memuat data';return;}
+  lastPanelData=j.data;
+  antigenKeys=j.header.slice(2);
+  const table=document.createElement('table');
+  const thead=document.createElement('thead');
+  const tr1=document.createElement('tr');
+  tr1.innerHTML='<th rowspan="2">Sel</th><th rowspan="2">Ref</th>'+`<th colspan="${antigenKeys.length}">Antigen</th>`+'<th rowspan="2">No</th><th colspan="4">Hasil Pemeriksaan</th>';
+  thead.appendChild(tr1);
+  const tr2=document.createElement('tr');
+  antigenKeys.forEach(k=>{const th=document.createElement('th');th.textContent=k;tr2.appendChild(th);});
+  ['20°C','37°C','IAT','Gel'].forEach(h=>{let th=document.createElement('th');th.textContent=h;tr2.appendChild(th);});
+  thead.appendChild(tr2); table.appendChild(thead);
+  const tbody=document.createElement('tbody');
+  j.data.cells.forEach((r,i)=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${r.sel}</td><td>${r.ref}</td>`; antigenKeys.forEach(k=>{const td=document.createElement('td');td.textContent=r.antigen[k]||'';td.className='antigen';tr.appendChild(td);}); tr.innerHTML+=`<td>${i+1}</td>`; ['20c','37c','iat','gel'].forEach(t=>{const td=document.createElement('td');td.appendChild(mkSelect(i+1,t));tr.appendChild(td);}); tbody.appendChild(tr); });
+  const trA=document.createElement('tr'); trA.innerHTML=`<td colspan="${2+antigenKeys.length}">Auto Kontrol</td><td></td>`; ['20c','37c','iat','gel'].forEach(t=>{const td=document.createElement('td');td.appendChild(mkSelect('auto',t));trA.appendChild(td);}); tbody.appendChild(trA);
+  table.appendChild(tbody); wrap.innerHTML=''; wrap.appendChild(table);
+  document.getElementById('meta').textContent=`Merk: ${j.data.meta.merk}   Lot: ${j.data.meta.lot}   Exp: ${j.data.meta.exp}`;
 }
 
-document.getElementById("refreshBtn").addEventListener("click", loadData);
-loadData();
+function isReactive(v){if(!v)return false;v=v.toLowerCase();return !(v.includes('neg')||v==='?'||v==='nt');}
+function antigenPresent(v){return v&&v.trim()&&v.trim()!=='0'&&v.trim()!=='-';}
+function analyzePanel(){
+  const s=Array.from(document.querySelectorAll('select[data-cell]'));
+  const by={};s.forEach(x=>{const c=x.dataset.cell;by[c]=by[c]||{};by[c][x.dataset.type]=x.value;});
+  const rows=lastPanelData.cells.map((c,i)=>({sel:c.sel,ref:c.ref,antigen:c.antigen,reactive:isReactive(by[i+1]?.['20c'])||isReactive(by[i+1]?.['37c'])||isReactive(by[i+1]?.['iat'])||isReactive(by[i+1]?.['gel'])}));
+  const react=rows.filter(r=>r.reactive), nonreact=rows.filter(r=>!r.reactive);
+  const cand=[]; antigenKeys.forEach(k=>{ if(react.every(r=>antigenPresent(r.antigen[k]))&&nonreact.every(r=>!antigenPresent(r.antigen[k]))) cand.push(k); });
+  showAnalysis({cand,reactCount:react.length,total:rows.length}); highlightAntigenColumnsByNames(cand);
+}
+function showAnalysis(o){ const d=document.getElementById('analysisContainer'); d.innerHTML=`<div class='analysis'><b>Ringkasan</b><br>Sel reaktif: ${o.reactCount}/${o.total}<br><br><b>Kemungkinan antibodi:</b> ${o.cand.length?o.cand.map(x=>`<span class='antibody-badge'>anti-${x}</span>`).join(' '):'-'}</div>`; }
+function highlightAntigenColumnsByNames(names){ document.querySelectorAll('.highlight-antigen').forEach(e=>e.classList.remove('highlight-antigen')); const table=document.querySelector('table'); if(!table)return; const ths=table.querySelectorAll('thead tr:nth-child(2) th'); names.forEach(n=>{ ths.forEach((th,i)=>{ if(th.textContent.trim().toLowerCase()===n.toLowerCase()){ th.classList.add('highlight-antigen'); document.querySelectorAll(`tbody tr td:nth-child(${i+3})`).forEach(td=>td.classList.add('highlight-antigen')); } }); }); }
+document.getElementById('refreshBtn').onclick=()=>fetchPanel().then(renderTable); document.getElementById('analyzeBtn').onclick=analyzePanel; window.onload=()=>fetchPanel().then(renderTable);
 </script>
-</body>
-</html>
+</body></html>
