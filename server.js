@@ -31,7 +31,7 @@ function readExcelToPanel() {
     return { ok: false, error: `File not found: ${EXCEL_PATH}` };
   }
 
-  const workbook = XLSX.readFile(EXCEL_PATH, { cellNF: false, cellDates: true });
+  const workbook = xlsx.readFile(path.join(__dirname, 'antigram.xlsx'));
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
   const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
@@ -223,6 +223,7 @@ app.get("/", (req, res) => {
 app.listen(port, () => {
   console.log(`Server berjalan di http://localhost:${port}`);
 });
+
 
 
 
